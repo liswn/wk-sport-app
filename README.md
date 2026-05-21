@@ -2,6 +2,28 @@
 
 本地优先的 iPhone PWA，用来查看骑行训练计划、记录体重和基础身体数据。应用不需要后端、不接统计或广告，数据保存在浏览器本地 IndexedDB。
 
+## 生产环境
+
+当前把 Gitee Pages 作为生产环境。
+
+```text
+https://liwenjin.gitee.io/wk-sport-app/
+```
+
+分支约定：
+
+| 分支 | 用途 |
+| --- | --- |
+| `main` | 源码、README、构建配置 |
+| `gh-pages` | 生产环境静态构建产物 |
+
+Gitee Pages 设置：
+
+```text
+分支：gh-pages
+目录：/
+```
+
 ## 页面访问路径
 
 本地开发访问：
@@ -16,7 +38,7 @@ http://127.0.0.1:5173/
 http://127.0.0.1:4173/
 ```
 
-这是一个 Vite 单页应用，当前页面入口统一为 `/`，应用内页面通过底部 Tab 切换：
+这是一个 Vite 单页应用，当前页面入口统一为 `/`。应用内页面通过底部 Tab 切换：
 
 | 页面 | 访问方式 |
 | --- | --- |
@@ -52,9 +74,19 @@ npm run build
 npm run preview
 ```
 
-## 部署到 GitHub Pages
+## 发布到 Gitee Pages
 
-仓库已包含 GitHub Pages Actions 工作流：
+构建生产文件：
+
+```bash
+npm run build
+```
+
+把 `dist/` 内容提交到 `gh-pages` 分支并推送到 Gitee。当前生产环境已经按这个方式发布。
+
+## GitHub Pages
+
+仓库也包含 GitHub Pages Actions 工作流：
 
 ```text
 .github/workflows/pages.yml
@@ -71,7 +103,7 @@ npm run build
 
 ## iPhone 添加到主屏幕
 
-1. 用 Safari 打开部署后的 HTTPS 地址。
+1. 用 Safari 打开生产环境 HTTPS 地址。
 2. 点击分享按钮。
 3. 选择「添加到主屏幕」。
 4. 从主屏幕打开后会以 PWA 独立窗口运行。
