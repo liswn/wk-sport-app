@@ -15,12 +15,14 @@ https://liswn.github.io/wk-sport-app/
 | 分支 | 用途 |
 | --- | --- |
 | `main` | 源码、README、构建配置 |
-| GitHub Actions Pages artifact | 生产环境静态构建产物 |
+| `gh-pages` | 生产环境静态构建产物 |
 
 GitHub Pages 设置：
 
 ```text
-Source：GitHub Actions
+Source：Deploy from a branch
+Branch：gh-pages
+Folder：/
 ```
 
 ## 页面访问路径
@@ -75,20 +77,21 @@ npm run preview
 
 ## 发布到 GitHub Pages
 
-仓库包含 GitHub Pages Actions 工作流：
+当前生产发布方式是把 `dist/` 构建产物推送到 `gh-pages` 分支。GitHub Pages 请选择：
+
+```text
+Source：Deploy from a branch
+Branch：gh-pages
+Folder：/
+```
+
+仓库也保留了 GitHub Pages Actions 工作流：
 
 ```text
 .github/workflows/pages.yml
 ```
 
-推送到 GitHub 的 `main` 分支后，GitHub Actions 会执行：
-
-```bash
-npm ci
-npm run build
-```
-
-并把 `dist/` 发布到 GitHub Pages。推送到 `main` 分支后会自动部署。
+如果以后改用 GitHub Actions 发布，需要在 GitHub Pages 设置里把 Source 改成 `GitHub Actions`。
 
 ## Gitee Pages
 
