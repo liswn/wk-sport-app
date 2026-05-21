@@ -4,10 +4,10 @@
 
 ## 生产环境
 
-当前把 Gitee Pages 作为生产环境。
+当前把 GitHub Pages 作为生产环境。
 
 ```text
-https://liwenjin.gitee.io/wk-sport-app/
+https://liswn.github.io/wk-sport-app/
 ```
 
 分支约定：
@@ -15,13 +15,12 @@ https://liwenjin.gitee.io/wk-sport-app/
 | 分支 | 用途 |
 | --- | --- |
 | `main` | 源码、README、构建配置 |
-| `gh-pages` | 生产环境静态构建产物 |
+| GitHub Actions Pages artifact | 生产环境静态构建产物 |
 
-Gitee Pages 设置：
+GitHub Pages 设置：
 
 ```text
-分支：gh-pages
-目录：/
+Source：GitHub Actions
 ```
 
 ## 页面访问路径
@@ -74,19 +73,9 @@ npm run build
 npm run preview
 ```
 
-## 发布到 Gitee Pages
+## 发布到 GitHub Pages
 
-构建生产文件：
-
-```bash
-npm run build
-```
-
-把 `dist/` 内容提交到 `gh-pages` 分支并推送到 Gitee。当前生产环境已经按这个方式发布。
-
-## GitHub Pages
-
-仓库也包含 GitHub Pages Actions 工作流：
+仓库包含 GitHub Pages Actions 工作流：
 
 ```text
 .github/workflows/pages.yml
@@ -99,7 +88,11 @@ npm ci
 npm run build
 ```
 
-并把 `dist/` 发布到 GitHub Pages。
+并把 `dist/` 发布到 GitHub Pages。推送到 `main` 分支后会自动部署。
+
+## Gitee Pages
+
+Gitee Pages 服务当前不可用，因此不再作为生产环境。
 
 ## iPhone 添加到主屏幕
 
