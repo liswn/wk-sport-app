@@ -13,6 +13,16 @@ export type Exercise = {
   reps: string;
 };
 
+export type PlanSegment = {
+  name: string;
+  durationMinutes?: number;
+  targetPowerRange?: [number, number];
+  repeat?: number;
+  recoveryMinutes?: number;
+  recoveryPowerRange?: [number, number];
+  notes?: string;
+};
+
 export type PlanDay = {
   date: string;
   templateId?: string;
@@ -21,6 +31,7 @@ export type PlanDay = {
   durationMinutes?: number;
   durationLabel?: string;
   powerRange?: [number, number];
+  segments?: PlanSegment[];
   rideDetails?: string;
   exercises?: Exercise[];
   strengthDurationLabel?: string;
@@ -106,6 +117,33 @@ export type FatigueAnalysisReport = {
   content: string;
 };
 
+export type AiChatMessage = {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  createdAt: string;
+};
+
+export type AiPlanPatch = {
+  id: string;
+  createdAt: string;
+  scope: "day" | "week";
+  summary: string;
+  changes: Array<{
+    date: string;
+    before: PlanDay;
+    after: PlanDay;
+    reason?: string;
+  }>;
+  appliedAt?: string;
+};
+
+export type AiCoachSession = {
+  messages: AiChatMessage[];
+  pendingPatch?: AiPlanPatch;
+  updatedAt: string;
+};
+
 export type SettingsState = {
   ftp: number;
   heightCm?: string;
@@ -139,6 +177,7 @@ export type AppData = {
   activityAnalyses: Record<string, ActivityAnalysis>;
   dayMemos: Record<string, DayMemo>;
   lastFatigueReport?: FatigueAnalysisReport;
+  aiCoachSession?: AiCoachSession;
   trainingTemplates: TrainingTemplate[];
 };
 
@@ -333,7 +372,7 @@ export function materializeTemplate(template: TrainingTemplate, date: string, ft
   const powerRange = template.rangePercent
     ? ([Math.round(template.rangePercent[0] * ftp), Math.round(template.rangePercent[1] * ftp)] as [number, number])
     : undefined;
-  return {
+  const plan = {
     date,
     templateId: template.id,
     title: template.title,
@@ -341,10 +380,75 @@ export function materializeTemplate(template: TrainingTemplate, date: string, ft
     durationMinutes: template.durationMinutes,
     durationLabel: template.durationLabel,
     powerRange,
+    segments: template.segments,
     rideDetails: template.rideDetails,
     exercises: template.exercises,
     strengthDurationLabel: template.strengthDurationLabel,
     notes: template.notes,
     nutrition: template.nutrition
   };
+  return {
+    ...plan,
+    segments: plan.segments?.length ? plan.segments : buildDefaultSegmentsForPlan(plan),
+  };
+}
+
+export function buildDefaultSegmentsForPlan(plan: Pick<PlanDay, "kind" | "durationMinutes" | "powerRange">): PlanSegment[] | undefined {
+  const duration = plan.durationMinutes ?? 0;
+  if (plan.kind === "rest" || duration <= 0) return undefined;
+  const target = plan.powerRange;
+  const easy: [number, number] = [85, 100];
+  const warmup = Math.min(12, Math.max(8, Math.round(duration * 0.18)));
+  const cooldown = Math.min(10, Math.max(5, Math.round(duration * 0.12)));
+
+  if (plan.kind === "sweetspot") {
+    return [
+      { name: "热身", durationMinutes: 12, targetPowerRange: [90, 115], notes: "逐步提高踏频和功率" },
+      {
+        name: "甜区主训练",
+        durationMinutes: 8,
+        targetPowerRange: target,
+        repeat: 3,
+        recoveryMinutes: 4,
+        recoveryPowerRange: easy,
+        notes: "3x8分钟，组间轻松骑",
+      },
+      { name: "冷身", durationMinutes: 10, targetPowerRange: easy },
+    ];
+  }
+
+  if (plan.kind === "threshold") {
+    return [
+      { name: "热身", durationMinutes: 12, targetPowerRange: [90, 120], notes: "包含2-3次短促唤醒" },
+      {
+        name: "阈值主训练",
+        durationMinutes: 10,
+        targetPowerRange: target,
+        repeat: 2,
+        recoveryMinutes: 5,
+        recoveryPowerRange: easy,
+        notes: "控制输出，不冲过头",
+      },
+      { name: "冷身", durationMinutes: 10, targetPowerRange: easy },
+    ];
+  }
+
+  const main = Math.max(duration - warmup - cooldown, 10);
+  return [
+    { name: "热身", durationMinutes: warmup, targetPowerRange: easy },
+    { name: labelSegmentMain(plan.kind), durationMinutes: main, targetPowerRange: target },
+    { name: "冷身", durationMinutes: cooldown, targetPowerRange: easy },
+  ];
+}
+
+function labelSegmentMain(kind: TrainingKind) {
+  return {
+    recovery: "轻松恢复",
+    z2: "Z2稳定骑",
+    aerobic: "有氧稳定骑",
+    sweetspot: "甜区主训练",
+    threshold: "阈值主训练",
+    rest: "休息",
+    strength: "力量训练",
+  }[kind];
 }

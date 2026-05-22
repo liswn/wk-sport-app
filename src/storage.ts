@@ -91,6 +91,12 @@ function normalizeData(data?: Partial<AppData>): AppData {
     activityAnalyses: data?.activityAnalyses ?? {},
     dayMemos: data?.dayMemos ?? {},
     lastFatigueReport: data?.lastFatigueReport,
+    aiCoachSession: data?.aiCoachSession
+      ? {
+          ...data.aiCoachSession,
+          messages: (data.aiCoachSession.messages ?? []).slice(-50),
+        }
+      : undefined,
     trainingTemplates: mergeTrainingTemplates(data?.trainingTemplates)
   };
 }

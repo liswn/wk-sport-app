@@ -2,8 +2,8 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   Button,
+  Dialog,
   Input,
-  Picker,
   Popup,
   Switch,
   TabBar,
@@ -15,11 +15,18 @@ import {
   CalendarCheck,
   CalendarDays,
   Check,
+  ChevronDown,
+  ChevronRight,
+  ArrowLeft,
+  BookOpenText,
+  ClipboardList,
   Download,
   Home,
+  KeyRound,
   Plus,
   RotateCcw,
   Settings,
+  Smartphone,
   Trash2,
   Upload,
   Weight,
@@ -31,24 +38,30 @@ import {
   Metric,
   StrengthList,
 } from "./components/TrainingBits";
+import { PickerField, type PickerOption } from "./components/PickerField";
 import { TrendChart } from "./components/TrendChart";
 import { addMonths, getCalendarDays } from "./calendarUtils";
 import { registerSW } from "virtual:pwa-register";
 import {
-  BodyEntry,
   ActivityAnalysis,
+  AiCoachSession,
+  AiChatMessage,
+  AiPlanPatch,
+  BodyEntry,
   Checkins,
   DEFAULT_AI_MODEL,
   DEFAULT_SETTINGS,
   DayMemo,
   type FatigueAnalysisReport,
   type FatigueLoadMetrics,
+  type PlanSegment,
   PlanDay,
   SettingsState,
   SUPPORTED_CHATGPT_MODELS,
   TrainingLog,
   TrainingKind,
   TrainingTemplate,
+  buildDefaultSegmentsForPlan,
   createBlankTemplate,
   defaultPlanForDate,
   defaultTrainingTemplates,
@@ -59,8 +72,10 @@ import type {
   TrainingHistorySummary,
 } from "./integrations";
 import {
+  requestAiCoachChat,
   requestAiFatigueAnalysis,
   requestAiTrainingRecommendation,
+  pushIntervalsWeekPlan,
   syncIntervalsAnalysis,
   syncIntervalsRangeAnalysis,
 } from "./integrations";
@@ -81,8 +96,11 @@ import {
 } from "./time";
 import {
   buildNutritionTips,
+  buildTemplatePreset,
+  defaultStrengthExercises,
   formatExercises,
   formatRangePercent,
+  formatSegmentSummary,
   labelKind,
   parseExercises,
   parseRangePercent,
@@ -92,7 +110,11 @@ import {
 registerSW({ immediate: true });
 
 type Tab = "today" | "plan" | "calendar" | "body" | "settings";
-type PickerOption = { label: string; value: string };
+type SettingsView = "main" | "integrations" | "templates" | "guide";
+type BeforeInstallPromptEvent = Event & {
+  prompt: () => Promise<void>;
+  userChoice: Promise<{ outcome: "accepted" | "dismissed"; platform: string }>;
+};
 
 const TRAINING_KIND_OPTIONS: PickerOption[] = [
   { label: "恢复", value: "recovery" },
@@ -168,10 +190,15 @@ function App() {
   const [lastFatigueReport, setLastFatigueReport] = useState<
     FatigueAnalysisReport | undefined
   >();
+  const [aiCoachSession, setAiCoachSession] = useState<
+    AiCoachSession | undefined
+  >();
   const [trainingTemplates, setTrainingTemplates] = useState<
     TrainingTemplate[]
   >(defaultTrainingTemplates);
   const [weekStart, setWeekStart] = useState(() => getWeekDays(new Date())[0]);
+  const scrollPositions = useRef<Partial<Record<Tab, number>>>({});
+  const shouldRestoreScroll = useRef(false);
 
   useEffect(() => {
     loadAppData().then((data) => {
@@ -183,6 +210,7 @@ function App() {
       setActivityAnalyses(data.activityAnalyses);
       setDayMemos(data.dayMemos);
       setLastFatigueReport(data.lastFatigueReport);
+      setAiCoachSession(data.aiCoachSession);
       setTrainingTemplates(data.trainingTemplates);
       setReady(true);
     });
@@ -199,6 +227,7 @@ function App() {
       activityAnalyses,
       dayMemos,
       lastFatigueReport,
+      aiCoachSession,
       trainingTemplates,
     });
   }, [
@@ -211,6 +240,7 @@ function App() {
     activityAnalyses,
     dayMemos,
     lastFatigueReport,
+    aiCoachSession,
     trainingTemplates,
   ]);
 
@@ -285,6 +315,26 @@ function App() {
     ["settings", Settings, "设置"],
   ] as const;
 
+  const switchTab = (nextTab: Tab) => {
+    if (nextTab === tab) return;
+    scrollPositions.current[tab] = window.scrollY;
+    shouldRestoreScroll.current = true;
+    setTab(nextTab);
+  };
+
+  useEffect(() => {
+    if (!shouldRestoreScroll.current) return;
+    shouldRestoreScroll.current = false;
+    const storedPosition = scrollPositions.current[tab];
+    if (storedPosition === undefined && tab === "plan") return;
+    window.setTimeout(() => {
+      window.scrollTo({
+        top: storedPosition ?? 0,
+        behavior: "auto",
+      });
+    }, 120);
+  }, [tab]);
+
   return (
     <main className="app-shell">
       <header className="topbar">
@@ -319,13 +369,17 @@ function App() {
             <PlanPage
               settings={settings}
               plans={plans}
+              bodyEntries={bodyEntries}
               checkins={checkins}
               templates={trainingTemplates}
               weekStart={weekStart}
               activityAnalyses={activityAnalyses}
+              lastFatigueReport={lastFatigueReport}
+              aiCoachSession={aiCoachSession}
               onWeekChange={setWeekStart}
               onPlanChange={updatePlan}
               onWeekPlansReplace={replaceWeekPlans}
+              onAiCoachSession={setAiCoachSession}
               onTemplate={applyTemplate}
               onTrainingDone={(date, value) =>
                 updateCheckin(date, "trainingDone", value)
@@ -398,6 +452,7 @@ function App() {
               activityAnalyses={activityAnalyses}
               dayMemos={dayMemos}
               lastFatigueReport={lastFatigueReport}
+              aiCoachSession={aiCoachSession}
               templates={trainingTemplates}
               onSettings={setSettings}
               onTemplates={setTrainingTemplates}
@@ -414,6 +469,7 @@ function App() {
                   setActivityAnalyses(data.activityAnalyses ?? {});
                   setDayMemos(data.dayMemos ?? {});
                   setLastFatigueReport(data.lastFatigueReport);
+                  setAiCoachSession(data.aiCoachSession);
                   setTrainingTemplates(
                     data.trainingTemplates ?? defaultTrainingTemplates,
                   );
@@ -421,18 +477,6 @@ function App() {
                 });
               }}
               onClear={async () => {
-                if (
-                  !window.confirm(
-                    "确定清空所有本地训练、身体和设置数据？此操作不能撤销。",
-                  )
-                )
-                  return;
-                if (
-                  !window.confirm(
-                    "再次确认：清空后只能通过之前导出的 JSON 恢复。",
-                  )
-                )
-                  return;
                 await clearAllData();
                 setSettings(DEFAULT_SETTINGS);
                 setPlans({});
@@ -442,6 +486,7 @@ function App() {
                 setActivityAnalyses({});
                 setDayMemos({});
                 setLastFatigueReport(undefined);
+                setAiCoachSession(undefined);
                 setTrainingTemplates(defaultTrainingTemplates);
               }}
             />
@@ -454,10 +499,14 @@ function App() {
         value={tab}
         fixed
         safeAreaInsetBottom
-        onChange={(value) => setTab(value as Tab)}
+        onChange={(value) => switchTab(value as Tab)}
       >
         {nav.map(([id, Icon, label]) => (
-          <TabBarItem key={id} value={id} icon={<Icon size={20} />}>
+          <TabBarItem
+            key={id}
+            value={id}
+            icon={<Icon size={23} strokeWidth={2.25} />}
+          >
             {label}
           </TabBarItem>
         ))}
@@ -466,58 +515,27 @@ function App() {
   );
 }
 
-function PickerField({
-  label,
-  value,
-  options,
-  placeholder = "请选择",
-  onChange,
-}: {
-  label: string;
-  value?: string;
-  options: PickerOption[];
-  placeholder?: string;
-  onChange: (value: string) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const safeOptions = options.length
-    ? options
-    : [{ label: placeholder, value: "" }];
-  const currentValue = value ?? "";
-  const current = safeOptions.find((item) => item.value === currentValue);
+function useSafeAreaTop() {
+  const [safeAreaTop, setSafeAreaTop] = useState(0);
 
-  return (
-    <div className="picker-field">
-      <span>{label}</span>
-      <button
-        type="button"
-        className="picker-trigger"
-        onClick={() => setOpen(true)}
-      >
-        <strong>{current?.label ?? placeholder}</strong>
-        <em>选择</em>
-      </button>
-      <Popup
-        visible={open}
-        placement="bottom"
-        closeOnOverlayClick
-        onClose={() => setOpen(false)}
-      >
-        <Picker
-          title={label}
-          columns={safeOptions}
-          value={[current?.value ?? safeOptions[0].value]}
-          cancelBtn="取消"
-          confirmBtn="确定"
-          onCancel={() => setOpen(false)}
-          onConfirm={(nextValue) => {
-            onChange(String(nextValue[0] ?? ""));
-            setOpen(false);
-          }}
-        />
-      </Popup>
-    </div>
-  );
+  useEffect(() => {
+    const measure = () => {
+      const probe = document.createElement("div");
+      probe.style.position = "fixed";
+      probe.style.top = "0";
+      probe.style.paddingTop = "env(safe-area-inset-top)";
+      document.body.appendChild(probe);
+      const next = Number.parseFloat(getComputedStyle(probe).paddingTop) || 0;
+      probe.remove();
+      setSafeAreaTop(next);
+    };
+
+    measure();
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, []);
+
+  return safeAreaTop;
 }
 
 function TodayPage({
@@ -1099,28 +1117,36 @@ function CalendarPage({
 function PlanPage({
   settings,
   plans,
+  bodyEntries,
   checkins,
   trainingLogs,
   templates,
   weekStart,
   activityAnalyses,
+  lastFatigueReport,
+  aiCoachSession,
   onWeekChange,
   onPlanChange,
   onWeekPlansReplace,
+  onAiCoachSession,
   onTemplate,
   onTrainingDone,
   onTrainingLogChange,
 }: {
   settings: SettingsState;
   plans: Record<string, PlanDay>;
+  bodyEntries: Record<string, BodyEntry>;
   checkins: Record<string, Checkins>;
   trainingLogs: Record<string, TrainingLog>;
   templates: TrainingTemplate[];
   weekStart: Date;
   activityAnalyses: Record<string, ActivityAnalysis>;
+  lastFatigueReport?: FatigueAnalysisReport;
+  aiCoachSession?: AiCoachSession;
   onWeekChange: (date: Date) => void;
   onPlanChange: (date: string, patch: Partial<PlanDay>) => void;
   onWeekPlansReplace: (plans: PlanDay[]) => void;
+  onAiCoachSession: (session: AiCoachSession | undefined) => void;
   onTemplate: (date: string, id: string) => void;
   onTrainingDone: (date: string, value: boolean) => void;
   onTrainingLogChange: (date: string, patch: Partial<TrainingLog>) => void;
@@ -1131,6 +1157,15 @@ function PlanPage({
   const [aiStatus, setAiStatus] = useState("");
   const [aiRecommendation, setAiRecommendation] =
     useState<AiTrainingRecommendation | null>(null);
+  const [coachOpen, setCoachOpen] = useState(false);
+  const [expandedDates, setExpandedDates] = useState<Record<string, boolean>>(
+    {},
+  );
+  const [intervalsPushLoading, setIntervalsPushLoading] = useState(false);
+  const [intervalsPushStatus, setIntervalsPushStatus] = useState("");
+  const [intervalsPushError, setIntervalsPushError] = useState("");
+  const [intervalsPushConfirmOpen, setIntervalsPushConfirmOpen] =
+    useState(false);
   const completedCount = week.filter(
     (day) => checkins[dateKey(day)]?.trainingDone,
   ).length;
@@ -1149,11 +1184,24 @@ function PlanPage({
     );
   }, [weekStart]);
 
+  const togglePlanDate = (date: string) => {
+    setExpandedDates((current) => ({ ...current, [date]: !current[date] }));
+  };
+
+  const expandPlanDate = (date: string) => {
+    setExpandedDates((current) =>
+      current[date] ? current : { ...current, [date]: true },
+    );
+  };
+
   const scrollToDate = (date: string) => {
-    cardRefs.current[date]?.scrollIntoView({
-      block: "start",
-      behavior: "smooth",
-    });
+    expandPlanDate(date);
+    window.setTimeout(() => {
+      cardRefs.current[date]?.scrollIntoView({
+        block: "start",
+        behavior: "smooth",
+      });
+    }, 40);
   };
 
   const weekPlans = week.map((day) => {
@@ -1203,6 +1251,28 @@ function PlanPage({
     setAiRecommendation(null);
   };
 
+  const handlePushWeekPlan = async () => {
+    setIntervalsPushConfirmOpen(false);
+    setIntervalsPushError("");
+    setIntervalsPushStatus("");
+    setIntervalsPushLoading(true);
+    try {
+      const result = await pushIntervalsWeekPlan({
+        settings,
+        plans: weekPlans,
+      });
+      setIntervalsPushStatus(
+        `已写入 Intervals.icu 日历：${result.synced}/${result.requested} 天。`,
+      );
+    } catch (error) {
+      setIntervalsPushError(
+        error instanceof Error ? error.message : String(error),
+      );
+    } finally {
+      setIntervalsPushLoading(false);
+    }
+  };
+
   return (
     <section className="stack">
       <div className="week-switch">
@@ -1247,15 +1317,25 @@ function PlanPage({
       <div className="panel ai-plan-panel">
         <div className="section-head">
           <h3>AI 训练建议</h3>
-          <Button
-            size="small"
-            shape="round"
-            variant="outline"
-            loading={aiLoading}
-            onClick={handleAiRecommend}
-          >
-            生成推荐
-          </Button>
+          <div className="section-actions">
+            <Button
+              size="small"
+              shape="round"
+              variant="outline"
+              onClick={() => setCoachOpen(true)}
+            >
+              AI 咨询
+            </Button>
+            <Button
+              size="small"
+              shape="round"
+              variant="outline"
+              loading={aiLoading}
+              onClick={handleAiRecommend}
+            >
+              生成推荐
+            </Button>
+          </div>
         </div>
         <p className="muted">
           使用最近 28 天的训练摘要分析和手动完成记录，请求你在设置里配置的 AI
@@ -1338,6 +1418,26 @@ function PlanPage({
         )}
       </div>
 
+      <TrainingCoachSheet
+        visible={coachOpen}
+        settings={settings}
+        plans={plans}
+        checkins={checkins}
+        trainingLogs={trainingLogs}
+        activityAnalyses={activityAnalyses}
+        bodyEntries={bodyEntries}
+        templates={templates}
+        weekPlans={weekPlans}
+        session={aiCoachSession}
+        lastFatigueReport={lastFatigueReport}
+        onSession={onAiCoachSession}
+        onApplyPatch={(patch) => {
+          onWeekPlansReplace(patch.changes.map((change) => change.after));
+          setAiStatus("已应用 AI 咨询里的计划修改，实际完成记录保持不变。");
+        }}
+        onClose={() => setCoachOpen(false)}
+      />
+
       {week.map((day) => {
         const key = dateKey(day);
         const plan = withCurrentPower(
@@ -1346,21 +1446,20 @@ function PlanPage({
           templates,
         );
         const log = trainingLogs[key] ?? { date: key };
+        const expanded = Boolean(expandedDates[key]);
         return (
           <article
-            className="panel plan-editor"
+            className={`panel plan-editor ${expanded ? "expanded" : "collapsed"}`}
             key={key}
             ref={(element) => {
               cardRefs.current[key] = element;
             }}
           >
             <div className="plan-head">
-              <div>
-                <p className="plan-date">{formatChineseDate(key)}</p>
-                <h3 className="plan-title">{plan.title}</h3>
-              </div>
-              <div className="plan-status">
-                <KindTag kind={plan.kind} />
+              <p className="plan-date" title={formatChineseDate(key)}>
+                {formatChineseDate(key)}
+              </p>
+              <div className="plan-card-actions">
                 <Button
                   size="small"
                   shape="round"
@@ -1371,93 +1470,649 @@ function PlanPage({
                     onTrainingDone(key, !checkins[key]?.trainingDone)
                   }
                   aria-pressed={Boolean(checkins[key]?.trainingDone)}
-                  icon={<Check size={16} />}
+                  icon={<Check size={15} />}
                 >
                   {checkins[key]?.trainingDone ? "已完成" : "未完成"}
                 </Button>
-              </div>
-            </div>
-            <div className="toggle-row">
-              <div>
-                <strong>力量训练</strong>
-                <span>打开后可和恢复、Z2、甜区等类型组合</span>
-              </div>
-              <Switch
-                size="small"
-                value={Boolean(plan.exercises?.length)}
-                onChange={(value) =>
-                  onPlanChange(key, {
-                    exercises: Boolean(value)
-                      ? plan.exercises?.length
-                        ? plan.exercises
-                        : defaultStrengthExercises()
-                      : undefined,
-                    strengthDurationLabel: Boolean(value) ? "20-25分钟" : "",
-                  })
-                }
-              />
-            </div>
-            <PickerField
-              label="模板"
-              value={plan.templateId ?? ""}
-              options={templates.map((template) => ({
-                label: template.name,
-                value: template.id,
-              }))}
-              onChange={(value) => onTemplate(key, value)}
-            />
-            <label>
-              标题
-              <Input
-                value={plan.title}
-                clearable
-                onChange={(value) =>
-                  onPlanChange(key, { title: String(value) })
-                }
-              />
-            </label>
-            {plan.kind !== "rest" && (
-              <label>
-                时长（分钟）
-                <Input
-                  type="number"
-                  value={plan.durationMinutes ?? ""}
-                  onChange={(value) =>
-                    onPlanChange(key, { durationMinutes: Number(value) })
+                <Button
+                  size="small"
+                  shape="round"
+                  variant="outline"
+                  className="plan-expand-button"
+                  onClick={() => togglePlanDate(key)}
+                  aria-expanded={expanded}
+                  icon={
+                    <ChevronDown size={15} className={expanded ? "open" : ""} />
                   }
+                >
+                  {expanded ? "收起" : "展开"}
+                </Button>
+              </div>
+            </div>
+            <div className="plan-title-row">
+              <KindTag kind={plan.kind} />
+              <h3 className="plan-title">{plan.title}</h3>
+            </div>
+            {!expanded ? (
+              <div className="plan-summary-text">{buildPlanSummary(plan)}</div>
+            ) : (
+              <div className="plan-card-body">
+                <div className="toggle-row">
+                  <div>
+                    <strong>力量训练</strong>
+                    <span>打开后可和恢复、Z2、甜区等类型组合</span>
+                  </div>
+                  <Switch
+                    size="small"
+                    value={Boolean(plan.exercises?.length)}
+                    onChange={(value) =>
+                      onPlanChange(key, {
+                        exercises: Boolean(value)
+                          ? plan.exercises?.length
+                            ? plan.exercises
+                            : defaultStrengthExercises()
+                          : undefined,
+                        strengthDurationLabel: Boolean(value)
+                          ? "20-25分钟"
+                          : "",
+                      })
+                    }
+                  />
+                </div>
+                <PickerField
+                  label="模板"
+                  value={plan.templateId ?? ""}
+                  options={templates.map((template) => ({
+                    label: template.name,
+                    value: template.id,
+                  }))}
+                  onChange={(value) => onTemplate(key, value)}
                 />
-              </label>
-            )}
-            {plan.kind !== "rest" && plan.powerRange && (
-              <div className="inline-summary">
-                当前 FTP 下目标功率：{plan.powerRange[0]}-{plan.powerRange[1]}W
+                <label>
+                  标题
+                  <Input
+                    value={plan.title}
+                    clearable
+                    onChange={(value) =>
+                      onPlanChange(key, { title: String(value) })
+                    }
+                  />
+                </label>
+                {plan.kind !== "rest" && (
+                  <label>
+                    时长（分钟）
+                    <Input
+                      type="number"
+                      value={plan.durationMinutes ?? ""}
+                      onChange={(value) =>
+                        onPlanChange(key, { durationMinutes: Number(value) })
+                      }
+                    />
+                  </label>
+                )}
+                {plan.kind !== "rest" && plan.powerRange && (
+                  <div className="inline-summary">
+                    当前 FTP 下目标功率：{plan.powerRange[0]}-
+                    {plan.powerRange[1]}W
+                  </div>
+                )}
+                {plan.rideDetails && (
+                  <div className="inline-summary">{plan.rideDetails}</div>
+                )}
+                {plan.kind !== "rest" && (
+                  <PlanSegmentEditor
+                    segments={
+                      plan.segments ?? buildDefaultSegmentsForPlan(plan) ?? []
+                    }
+                    defaultPowerRange={plan.powerRange}
+                    onChange={(segments) => onPlanChange(key, { segments })}
+                  />
+                )}
+                {plan.exercises && <StrengthList plan={plan} />}
+                <label>
+                  备注
+                  <Textarea
+                    value={plan.notes ?? ""}
+                    autosize={{ minRows: 2, maxRows: 5 }}
+                    onChange={(value) =>
+                      onPlanChange(key, { notes: String(value) })
+                    }
+                  />
+                </label>
+                {plan.nutrition && (
+                  <p className="nutrition-note">{plan.nutrition}</p>
+                )}
+                <TrainingLogEditor
+                  log={log}
+                  onChange={(patch) => onTrainingLogChange(key, patch)}
+                />
               </div>
             )}
-            {plan.rideDetails && (
-              <div className="inline-summary">{plan.rideDetails}</div>
-            )}
-            {plan.exercises && <StrengthList plan={plan} />}
-            <label>
-              备注
-              <Textarea
-                value={plan.notes ?? ""}
-                autosize={{ minRows: 2, maxRows: 5 }}
-                onChange={(value) =>
-                  onPlanChange(key, { notes: String(value) })
-                }
-              />
-            </label>
-            {plan.nutrition && (
-              <p className="nutrition-note">{plan.nutrition}</p>
-            )}
-            <TrainingLogEditor
-              log={log}
-              onChange={(patch) => onTrainingLogChange(key, patch)}
-            />
           </article>
         );
       })}
+
+      <div className="panel intervals-plan-panel">
+        <Button
+          shape="round"
+          variant="outline"
+          loading={intervalsPushLoading}
+          onClick={() => setIntervalsPushConfirmOpen(true)}
+        >
+          导入 Intervals.icu 日历
+        </Button>
+        {intervalsPushError && (
+          <p className="sync-error">{intervalsPushError}</p>
+        )}
+        {intervalsPushStatus && (
+          <p className="sync-success">{intervalsPushStatus}</p>
+        )}
+      </div>
+
+      <Dialog
+        visible={intervalsPushConfirmOpen}
+        title="导入 Intervals.icu 日历"
+        content={
+          <div className="dialog-copy">
+            <p>
+              确认本周计划已经调整好后，再把 7 天计划写入 Intervals.icu 日历。
+            </p>
+            <p>
+              应用只上传计划标题、训练分段、训练说明、预计时长、目标功率和力量动作。
+              同日期的 wk-sport-app 计划会按当前内容更新。
+            </p>
+          </div>
+        }
+        cancelBtn="取消"
+        confirmBtn="确认导入"
+        onClose={() => setIntervalsPushConfirmOpen(false)}
+        onCancel={() => setIntervalsPushConfirmOpen(false)}
+        onConfirm={handlePushWeekPlan}
+      />
     </section>
+  );
+}
+
+function buildPlanSummary(plan: PlanDay) {
+  const parts = [
+    plan.kind === "rest"
+      ? "休息日"
+      : plan.durationLabel ||
+        (plan.durationMinutes ? `${plan.durationMinutes}分钟` : ""),
+    plan.powerRange ? `${plan.powerRange[0]}-${plan.powerRange[1]}W` : "",
+    formatSegmentSummary(plan.segments),
+    plan.exercises?.length
+      ? `力量 ${plan.strengthDurationLabel || `${plan.exercises.length}个动作`}`
+      : "",
+  ].filter(Boolean);
+
+  return parts.join(" · ") || "点击展开查看和编辑当天计划";
+}
+
+function PlanSegmentEditor({
+  segments,
+  defaultPowerRange,
+  onChange,
+}: {
+  segments: PlanSegment[];
+  defaultPowerRange?: [number, number];
+  onChange: (segments: PlanSegment[] | undefined) => void;
+}) {
+  const updateSegment = (index: number, patch: Partial<PlanSegment>) => {
+    onChange(
+      segments.map((segment, currentIndex) =>
+        currentIndex === index ? { ...segment, ...patch } : segment,
+      ),
+    );
+  };
+
+  const addSegment = () => {
+    onChange([
+      ...segments,
+      {
+        name: "新训练段",
+        durationMinutes: 10,
+        targetPowerRange: defaultPowerRange,
+      },
+    ]);
+  };
+
+  const removeSegment = (index: number) => {
+    const next = segments.filter((_, currentIndex) => currentIndex !== index);
+    onChange(next.length ? next : undefined);
+  };
+
+  return (
+    <div className="segment-editor">
+      <div className="section-head compact">
+        <h4>训练分段</h4>
+        <Button
+          size="small"
+          shape="round"
+          variant="outline"
+          icon={<Plus size={15} />}
+          onClick={addSegment}
+        >
+          添加
+        </Button>
+      </div>
+      {segments.map((segment, index) => (
+        <div className="segment-card" key={`${segment.name}-${index}`}>
+          <div className="segment-card-head">
+            <span>{index + 1}</span>
+            <Input
+              value={segment.name}
+              clearable
+              placeholder="分段名称"
+              onChange={(value) =>
+                updateSegment(index, { name: String(value) })
+              }
+            />
+            <Button
+              size="small"
+              shape="round"
+              variant="outline"
+              icon={<Trash2 size={15} />}
+              onClick={() => removeSegment(index)}
+            />
+          </div>
+          <div className="segment-fields">
+            <label>
+              时长
+              <Input
+                type="number"
+                value={segment.durationMinutes ?? ""}
+                placeholder="分钟"
+                onChange={(value) =>
+                  updateSegment(index, {
+                    durationMinutes: optionalNumber(value),
+                  })
+                }
+              />
+            </label>
+            <label>
+              目标功率
+              <Input
+                value={formatPowerRangeInput(segment.targetPowerRange)}
+                placeholder="155-162"
+                onChange={(value) =>
+                  updateSegment(index, {
+                    targetPowerRange: parsePowerRangeInput(String(value)),
+                  })
+                }
+              />
+            </label>
+            <label>
+              重复
+              <Input
+                type="number"
+                value={segment.repeat ?? ""}
+                placeholder="1"
+                onChange={(value) =>
+                  updateSegment(index, { repeat: optionalNumber(value) })
+                }
+              />
+            </label>
+            <label>
+              恢复
+              <Input
+                type="number"
+                value={segment.recoveryMinutes ?? ""}
+                placeholder="分钟"
+                onChange={(value) =>
+                  updateSegment(index, {
+                    recoveryMinutes: optionalNumber(value),
+                  })
+                }
+              />
+            </label>
+            <label className="segment-field-wide">
+              恢复功率
+              <Input
+                value={formatPowerRangeInput(segment.recoveryPowerRange)}
+                placeholder="85-100"
+                onChange={(value) =>
+                  updateSegment(index, {
+                    recoveryPowerRange: parsePowerRangeInput(String(value)),
+                  })
+                }
+              />
+            </label>
+          </div>
+          <Textarea
+            value={segment.notes ?? ""}
+            placeholder="备注，例如：组间轻松骑、逐步提高踏频..."
+            autosize={{ minRows: 1, maxRows: 3 }}
+            onChange={(value) => updateSegment(index, { notes: String(value) })}
+          />
+        </div>
+      ))}
+      {!segments.length && (
+        <p className="muted-note">
+          添加热身、主训练、恢复和冷身后，同步到 Intervals.icu 时会一起带过去。
+        </p>
+      )}
+    </div>
+  );
+}
+
+function PlanSegmentList({
+  segments,
+}: {
+  segments: NonNullable<PlanDay["segments"]>;
+}) {
+  return (
+    <div className="segment-list">
+      <h4>训练分段</h4>
+      {segments.map((segment, index) => (
+        <div key={`${segment.name}-${index}`}>
+          <span>{index + 1}</span>
+          <strong>{segment.name}</strong>
+          <em>
+            {segment.repeat ? `${segment.repeat}x ` : ""}
+            {segment.durationMinutes
+              ? `${segment.durationMinutes}分钟`
+              : "按体感"}
+            {segment.targetPowerRange
+              ? ` · ${segment.targetPowerRange[0]}-${segment.targetPowerRange[1]}W`
+              : ""}
+            {segment.recoveryMinutes
+              ? ` · 组间${segment.recoveryMinutes}分钟`
+              : ""}
+          </em>
+          {segment.notes && <p>{segment.notes}</p>}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function optionalNumber(value: string | number) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function formatPowerRangeInput(range?: [number, number]) {
+  return range ? `${range[0]}-${range[1]}` : "";
+}
+
+function parsePowerRangeInput(value: string): [number, number] | undefined {
+  const matches = value
+    .replace(/[wW瓦]/g, "")
+    .match(/\d+(?:\.\d+)?/g)
+    ?.map((item) => Number(item))
+    .filter((item) => Number.isFinite(item));
+  if (!matches || matches.length < 2) return undefined;
+  return [
+    Math.round(Math.min(matches[0], matches[1])),
+    Math.round(Math.max(matches[0], matches[1])),
+  ];
+}
+
+function TrainingCoachSheet({
+  visible,
+  settings,
+  plans,
+  checkins,
+  trainingLogs,
+  activityAnalyses,
+  bodyEntries,
+  templates,
+  weekPlans,
+  session,
+  lastFatigueReport,
+  onSession,
+  onApplyPatch,
+  onClose,
+}: {
+  visible: boolean;
+  settings: SettingsState;
+  plans: Record<string, PlanDay>;
+  checkins: Record<string, Checkins>;
+  trainingLogs: Record<string, TrainingLog>;
+  activityAnalyses: Record<string, ActivityAnalysis>;
+  bodyEntries: Record<string, BodyEntry>;
+  templates: TrainingTemplate[];
+  weekPlans: PlanDay[];
+  session?: AiCoachSession;
+  lastFatigueReport?: FatigueAnalysisReport;
+  onSession: (session: AiCoachSession | undefined) => void;
+  onApplyPatch: (patch: AiPlanPatch) => void;
+  onClose: () => void;
+}) {
+  const [input, setInput] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const messages = session?.messages ?? [];
+  const pendingPatch = session?.pendingPatch?.appliedAt
+    ? undefined
+    : session?.pendingPatch;
+  const quickQuestions = [
+    "今天适合练吗？",
+    "本周计划要不要降载？",
+    "明天做 Z2 还是休息？",
+    "帮我调整本周计划",
+  ];
+
+  const saveSession = (
+    nextMessages: AiChatMessage[],
+    pendingPatchNext = pendingPatch,
+  ) => {
+    onSession({
+      messages: nextMessages.slice(-50),
+      pendingPatch: pendingPatchNext,
+      updatedAt: new Date().toISOString(),
+    });
+  };
+
+  const appendLocalReply = (question: string, content: string) => {
+    saveSession([
+      ...messages,
+      createChatMessage("user", question),
+      createChatMessage("assistant", content),
+    ]);
+  };
+
+  const sendQuestion = async (value?: string) => {
+    const question = (value ?? input).trim();
+    if (!question || loading) return;
+    setInput("");
+    setError("");
+
+    if (!isTrainingRelatedQuestion(question)) {
+      appendLocalReply(
+        question,
+        "这个窗口只处理训练计划、恢复、骑行、力量和执行记录相关问题。",
+      );
+      return;
+    }
+
+    const userMessage = createChatMessage("user", question);
+    const nextMessages = [...messages, userMessage];
+    saveSession(nextMessages);
+    setLoading(true);
+    try {
+      const recentKeys = Array.from({ length: 42 }, (_, index) =>
+        dateKey(addDays(new Date(), -index)),
+      );
+      const history = buildTrainingHistorySummary({
+        settings,
+        plans,
+        checkins,
+        trainingLogs,
+        activityAnalyses,
+        bodyEntries,
+        templates,
+      });
+      const reply = await requestAiCoachChat({
+        settings,
+        question,
+        messages,
+        weekPlans,
+        analyses: recentKeys
+          .map((key) => activityAnalyses[key])
+          .filter(Boolean),
+        logs: recentKeys.map((key) => trainingLogs[key]).filter(Boolean),
+        history,
+        lastFatigueReport,
+      });
+      saveSession(
+        [...nextMessages, createChatMessage("assistant", reply.message)],
+        reply.planPatch ?? pendingPatch,
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      saveSession(nextMessages);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const applyPatch = () => {
+    if (!pendingPatch) return;
+    const appliedPatch = {
+      ...pendingPatch,
+      appliedAt: new Date().toISOString(),
+    };
+    onApplyPatch(pendingPatch);
+    saveSession(
+      [
+        ...messages,
+        createChatMessage(
+          "assistant",
+          `已应用计划修改：${pendingPatch.summary}`,
+        ),
+      ],
+      appliedPatch,
+    );
+  };
+
+  const dismissPatch = () => {
+    saveSession(messages, undefined);
+  };
+
+  return (
+    <Popup
+      visible={visible}
+      placement="bottom"
+      closeOnOverlayClick
+      onClose={onClose}
+    >
+      <div className="coach-sheet">
+        <div className="coach-head">
+          <div>
+            <h3>训练顾问</h3>
+            <p>只聊训练计划、恢复、骑行、力量和执行记录</p>
+          </div>
+          <Button
+            size="small"
+            shape="round"
+            variant="outline"
+            onClick={onClose}
+          >
+            关闭
+          </Button>
+        </div>
+
+        <div className="coach-quick">
+          {quickQuestions.map((question) => (
+            <button
+              type="button"
+              key={question}
+              disabled={loading}
+              onClick={() => sendQuestion(question)}
+            >
+              {question}
+            </button>
+          ))}
+        </div>
+
+        <div className="coach-messages">
+          {messages.length ? (
+            messages.map((message) => (
+              <div key={message.id} className={`coach-message ${message.role}`}>
+                <p>{message.content}</p>
+              </div>
+            ))
+          ) : (
+            <div className="coach-empty">
+              问我今天练不练、本周是否降载，或者让 AI 先给一版计划修改建议。
+            </div>
+          )}
+          {loading && <div className="coach-empty">正在分析训练记录...</div>}
+        </div>
+
+        {pendingPatch && (
+          <div className="coach-patch">
+            <div className="ai-preview-head">
+              <strong>{pendingPatch.summary}</strong>
+              <span>{pendingPatch.scope === "week" ? "整周" : "单日"}</span>
+            </div>
+            <div className="coach-patch-list">
+              {pendingPatch.changes.map((change) => (
+                <div key={change.date}>
+                  <strong>{formatChineseDate(change.date)}</strong>
+                  <p>
+                    原计划：{change.before.title} ·{" "}
+                    {labelKind(change.before.kind)}
+                  </p>
+                  <p>
+                    建议：{change.after.title} · {labelKind(change.after.kind)}
+                    {change.after.durationMinutes
+                      ? ` · ${change.after.durationMinutes}分钟`
+                      : ""}
+                  </p>
+                  {change.after.powerRange && (
+                    <p>
+                      功率：{change.after.powerRange[0]}-
+                      {change.after.powerRange[1]}W
+                    </p>
+                  )}
+                  {change.reason && <em>{change.reason}</em>}
+                </div>
+              ))}
+            </div>
+            <div className="ai-preview-actions">
+              <Button
+                size="small"
+                shape="round"
+                variant="outline"
+                onClick={dismissPatch}
+              >
+                忽略
+              </Button>
+              <Button
+                size="small"
+                shape="round"
+                theme="primary"
+                onClick={applyPatch}
+              >
+                应用修改
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {error && <p className="sync-error">{error}</p>}
+        <div className="coach-input">
+          <Textarea
+            value={input}
+            placeholder="只询问训练计划、恢复、骑行、力量或饮食执行..."
+            autosize={{ minRows: 1, maxRows: 4 }}
+            onChange={(value) => setInput(String(value))}
+          />
+          <Button
+            theme="primary"
+            shape="round"
+            loading={loading}
+            disabled={!input.trim()}
+            onClick={() => sendQuestion()}
+          >
+            发送
+          </Button>
+        </div>
+      </div>
+    </Popup>
   );
 }
 
@@ -1703,6 +2358,7 @@ function SettingsPage({
   activityAnalyses,
   dayMemos,
   lastFatigueReport,
+  aiCoachSession,
   templates,
   onSettings,
   onTemplates,
@@ -1718,6 +2374,7 @@ function SettingsPage({
   activityAnalyses: Record<string, ActivityAnalysis>;
   dayMemos: Record<string, DayMemo>;
   lastFatigueReport?: FatigueAnalysisReport;
+  aiCoachSession?: AiCoachSession;
   templates: TrainingTemplate[];
   onSettings: (settings: SettingsState) => void;
   onTemplates: (templates: TrainingTemplate[]) => void;
@@ -1726,6 +2383,8 @@ function SettingsPage({
   onClear: () => void;
 }) {
   const [selectedId, setSelectedId] = useState(templates[0]?.id ?? "");
+  const [view, setView] = useState<SettingsView>("main");
+  const [clearDialogStep, setClearDialogStep] = useState<0 | 1 | 2>(0);
   const selected =
     templates.find((template) => template.id === selectedId) ?? templates[0];
 
@@ -1803,378 +2462,692 @@ function SettingsPage({
     });
   };
 
+  const handleClearConfirm = async () => {
+    if (clearDialogStep === 1) {
+      setClearDialogStep(2);
+      return;
+    }
+    setClearDialogStep(0);
+    await onClear();
+  };
+
   return (
     <section className="stack">
-      <div className="panel">
-        <h2>设置</h2>
-        <div className="form-grid">
-          <label>
-            FTP（瓦）
-            <Input
-              type="number"
-              value={settings.ftp}
-              onChange={(value) =>
-                onSettings({ ...settings, ftp: Number(value) })
-              }
-            />
-          </label>
-          <label>
-            身高 cm
-            <Input
-              type="number"
-              value={settings.heightCm ?? ""}
-              placeholder="例如 175"
-              onChange={(value) =>
-                onSettings({ ...settings, heightCm: String(value) })
-              }
-            />
-          </label>
-        </div>
-        <div className="zones">
-          <PowerZone
-            name="Z1恢复"
-            range={[0, 96 / 175]}
-            ftp={settings.ftp}
-            prefix="<"
-          />
-          <PowerZone
-            name="Z2耐力"
-            range={[98 / 175, 131 / 175]}
-            ftp={settings.ftp}
-          />
-          <PowerZone
-            name="Z3节奏"
-            range={[132 / 175, 157 / 175]}
-            ftp={settings.ftp}
-          />
-          <PowerZone
-            name="甜区"
-            range={[154 / 175, 164 / 175]}
-            ftp={settings.ftp}
-          />
-          <PowerZone
-            name="阈值"
-            range={[166 / 175, 184 / 175]}
-            ftp={settings.ftp}
-          />
-        </div>
-      </div>
-
-      <div className="panel goal-panel">
-        <h2>训练目标</h2>
-        <p className="muted">
-          这里会作为 AI
-          生成训练计划和饮食建议的主要上下文，只在点击生成时发送给你配置的 AI
-          接口。
-        </p>
-        <label>
-          目标描述
-          <Textarea
-            value={settings.goalText ?? DEFAULT_SETTINGS.goalText}
-            autosize={{ minRows: 7, maxRows: 12 }}
-            onChange={(value) =>
-              onSettings({ ...settings, goalText: String(value) })
-            }
-          />
-        </label>
-        <div className="form-grid">
-          <PickerField
-            label="策略倾向"
-            value={settings.strategyLevel ?? DEFAULT_SETTINGS.strategyLevel}
-            options={STRATEGY_OPTIONS}
-            onChange={(value) =>
-              onSettings({
-                ...settings,
-                strategyLevel: value as SettingsState["strategyLevel"],
-              })
-            }
-          />
-          <PickerField
-            label="当前重点"
-            value={settings.goalFocus ?? DEFAULT_SETTINGS.goalFocus}
-            options={GOAL_FOCUS_OPTIONS}
-            onChange={(value) =>
-              onSettings({
-                ...settings,
-                goalFocus: value as SettingsState["goalFocus"],
-              })
-            }
-          />
-        </div>
-        <p className="goal-hint">
-          建议按模板写清：目标、周期、训练时间、偏好、身体目标、饮食原则和限制。策略默认“平衡”，除非你明确愿意承受更高疲劳。
-        </p>
-      </div>
-
-      <div className="panel integration-panel">
-        <h2>外部同步与 AI</h2>
-        <p className="muted">
-          这些配置只保存在本机浏览器。只有你点击同步或生成推荐时，才会请求对应服务。
-        </p>
-        <h3>Intervals.icu</h3>
-        <div className="form-grid">
-          <label>
-            API 地址
-            <Input
-              value={settings.intervalsApiBase ?? ""}
-              placeholder="https://intervals.icu/api/v1"
-              onChange={(value) =>
-                onSettings({ ...settings, intervalsApiBase: String(value) })
-              }
-            />
-          </label>
-          <label>
-            Athlete ID
-            <Input
-              value={settings.intervalsAthleteId ?? ""}
-              placeholder="例如 i12345"
-              onChange={(value) =>
-                onSettings({ ...settings, intervalsAthleteId: String(value) })
-              }
-            />
-          </label>
-        </div>
-        <label>
-          Intervals.icu API Key
-          <Input
-            type="password"
-            value={settings.intervalsApiKey ?? ""}
-            placeholder="仅保存在本地"
-            onChange={(value) =>
-              onSettings({ ...settings, intervalsApiKey: String(value) })
-            }
-          />
-        </label>
-        <h3>OpenAI 兼容接口</h3>
-        <label>
-          请求地址
-          <Input
-            value={settings.aiEndpoint ?? ""}
-            placeholder="填写接口地址"
-            onChange={(value) =>
-              onSettings({ ...settings, aiEndpoint: String(value) })
-            }
-          />
-        </label>
-        <div className="form-grid">
-          <PickerField
-            label="ChatGPT 模型"
-            value={settings.aiModel || DEFAULT_AI_MODEL}
-            options={CHATGPT_MODEL_OPTIONS}
-            onChange={(aiModel) => onSettings({ ...settings, aiModel })}
-          />
-          <label>
-            API Key
-            <Input
-              type="password"
-              value={settings.aiApiKey ?? ""}
-              placeholder="仅保存在本地"
-              onChange={(value) =>
-                onSettings({ ...settings, aiApiKey: String(value) })
-              }
-            />
-          </label>
-        </div>
-      </div>
-
-      <div className="panel template-panel">
-        <div className="section-head">
-          <h2>训练模板</h2>
-          <Button
-            size="small"
-            shape="round"
-            theme="primary"
-            variant="outline"
-            icon={<Plus size={17} />}
-            onClick={addTemplate}
-          >
-            新增
-          </Button>
-        </div>
-        {selected && (
-          <>
-            <PickerField
-              label="选择模板"
-              value={selected.id}
-              options={templates.map((template) => ({
-                label: template.name,
-                value: template.id,
-              }))}
-              onChange={setSelectedId}
-            />
+      {view === "main" && (
+        <>
+          <div className="panel">
+            <h2>设置</h2>
             <div className="form-grid">
               <label>
-                模板名
+                FTP（瓦）
                 <Input
-                  value={selected.name}
-                  clearable
-                  onChange={(value) => updateTemplate({ name: String(value) })}
-                />
-              </label>
-              <PickerField
-                label="类型"
-                value={
-                  selected.kind === "strength" ? "recovery" : selected.kind
-                }
-                options={TRAINING_KIND_OPTIONS}
-                onChange={(value) => applyKindPreset(value as TrainingKind)}
-              />
-            </div>
-            <div className="toggle-row">
-              <div>
-                <strong>力量训练</strong>
-                <span>打开后可和恢复、Z2、甜区等类型组合</span>
-              </div>
-              <Switch
-                size="small"
-                value={Boolean(selected.exercises?.length)}
-                onChange={(value) => toggleStrength(Boolean(value))}
-              />
-            </div>
-            <label>
-              计划标题
-              <Input
-                value={selected.title}
-                clearable
-                onChange={(value) => updateTemplate({ title: String(value) })}
-              />
-            </label>
-            {selected.kind !== "rest" && (
-              <div className="form-grid">
-                <label>
-                  时长（分钟）
-                  <Input
-                    type="number"
-                    value={selected.durationMinutes ?? ""}
-                    onChange={(value) =>
-                      updateTemplate({ durationMinutes: Number(value) })
-                    }
-                  />
-                </label>
-                <label>
-                  FTP百分比
-                  <Input
-                    value={formatRangePercent(selected.rangePercent)}
-                    placeholder="例如 63-72"
-                    onChange={(value) =>
-                      updateTemplate({
-                        rangePercent: parseRangePercent(String(value)),
-                      })
-                    }
-                  />
-                </label>
-              </div>
-            )}
-            {Boolean(selected.exercises?.length) && (
-              <label>
-                动作清单（每行：动作 | 组数 | 次数）
-                <Textarea
-                  value={formatExercises(selected.exercises)}
-                  autosize={{ minRows: 4, maxRows: 8 }}
+                  type="number"
+                  value={settings.ftp}
                   onChange={(value) =>
-                    updateTemplate({ exercises: parseExercises(String(value)) })
+                    onSettings({ ...settings, ftp: Number(value) })
                   }
                 />
               </label>
-            )}
+              <label>
+                身高 cm
+                <Input
+                  type="number"
+                  value={settings.heightCm ?? ""}
+                  placeholder="例如 175"
+                  onChange={(value) =>
+                    onSettings({ ...settings, heightCm: String(value) })
+                  }
+                />
+              </label>
+            </div>
+            <div className="zones">
+              <PowerZone
+                name="Z1恢复"
+                range={[0, 96 / 175]}
+                ftp={settings.ftp}
+                prefix="<"
+              />
+              <PowerZone
+                name="Z2耐力"
+                range={[98 / 175, 131 / 175]}
+                ftp={settings.ftp}
+              />
+              <PowerZone
+                name="Z3节奏"
+                range={[132 / 175, 157 / 175]}
+                ftp={settings.ftp}
+              />
+              <PowerZone
+                name="甜区"
+                range={[154 / 175, 164 / 175]}
+                ftp={settings.ftp}
+              />
+              <PowerZone
+                name="阈值"
+                range={[166 / 175, 184 / 175]}
+                ftp={settings.ftp}
+              />
+            </div>
+          </div>
+
+          <div className="panel goal-panel">
+            <h2>训练目标</h2>
+            <p className="muted">
+              这里会作为 AI
+              生成训练计划和饮食建议的主要上下文，只在点击生成时发送给你配置的
+              AI 接口。
+            </p>
             <label>
-              骑行说明
+              目标描述
               <Textarea
-                value={selected.rideDetails ?? ""}
-                autosize={{ minRows: 2, maxRows: 5 }}
+                value={settings.goalText ?? DEFAULT_SETTINGS.goalText}
+                autosize={{ minRows: 7, maxRows: 12 }}
                 onChange={(value) =>
-                  updateTemplate({ rideDetails: String(value) })
+                  onSettings({ ...settings, goalText: String(value) })
                 }
               />
             </label>
-            <label>
-              饮食提示
-              <Textarea
-                value={selected.nutrition ?? ""}
-                autosize={{ minRows: 2, maxRows: 5 }}
+            <div className="form-grid">
+              <PickerField
+                label="策略倾向"
+                value={settings.strategyLevel ?? DEFAULT_SETTINGS.strategyLevel}
+                options={STRATEGY_OPTIONS}
                 onChange={(value) =>
-                  updateTemplate({ nutrition: String(value) })
+                  onSettings({
+                    ...settings,
+                    strategyLevel: value as SettingsState["strategyLevel"],
+                  })
+                }
+              />
+              <PickerField
+                label="当前重点"
+                value={settings.goalFocus ?? DEFAULT_SETTINGS.goalFocus}
+                options={GOAL_FOCUS_OPTIONS}
+                onChange={(value) =>
+                  onSettings({
+                    ...settings,
+                    goalFocus: value as SettingsState["goalFocus"],
+                  })
+                }
+              />
+            </div>
+            <p className="goal-hint">
+              建议按模板写清：目标、周期、训练时间、偏好、身体目标、饮食原则和限制。策略默认“平衡”，除非你明确愿意承受更高疲劳。
+            </p>
+          </div>
+
+          <div className="settings-nav">
+            <button type="button" onClick={() => setView("integrations")}>
+              <span className="settings-nav-icon api">
+                <KeyRound size={18} />
+              </span>
+              <span>
+                <strong>外部 API 与 AI</strong>
+                <em>Intervals.icu、ChatGPT 兼容接口和密钥</em>
+              </span>
+              <ChevronRight size={18} />
+            </button>
+            <button type="button" onClick={() => setView("templates")}>
+              <span className="settings-nav-icon template">
+                <ClipboardList size={18} />
+              </span>
+              <span>
+                <strong>训练模板</strong>
+                <em>{templates.length} 个模板，编辑类型、功率和饮食提示</em>
+              </span>
+              <ChevronRight size={18} />
+            </button>
+            <button type="button" onClick={() => setView("guide")}>
+              <span className="settings-nav-icon guide">
+                <BookOpenText size={18} />
+              </span>
+              <span>
+                <strong>使用文档</strong>
+                <em>安装到桌面、日常记录、同步、AI 和备份说明</em>
+              </span>
+              <ChevronRight size={18} />
+            </button>
+          </div>
+
+          <InstallGuide />
+        </>
+      )}
+
+      {view === "integrations" && (
+        <>
+          <SettingsSubpageHeader
+            title="外部 API 与 AI"
+            subtitle="这些配置只保存在本机浏览器，只有手动同步或生成建议时才会请求外部服务。"
+            onBack={() => setView("main")}
+          />
+          <div className="panel integration-panel">
+            <h2>外部同步与 AI</h2>
+            <p className="muted">
+              这些配置只保存在本机浏览器。只有你点击同步或生成推荐时，才会请求对应服务。
+            </p>
+            <h3>Intervals.icu</h3>
+            <div className="form-grid">
+              <label>
+                API 地址
+                <Input
+                  value={settings.intervalsApiBase ?? ""}
+                  placeholder="填写 Intervals.icu API 地址"
+                  onChange={(value) =>
+                    onSettings({ ...settings, intervalsApiBase: String(value) })
+                  }
+                />
+              </label>
+              <label>
+                Athlete ID
+                <Input
+                  value={settings.intervalsAthleteId ?? ""}
+                  placeholder="填写 Athlete ID"
+                  onChange={(value) =>
+                    onSettings({
+                      ...settings,
+                      intervalsAthleteId: String(value),
+                    })
+                  }
+                />
+              </label>
+            </div>
+            <label>
+              Intervals.icu API Key
+              <Input
+                type="password"
+                value={settings.intervalsApiKey ?? ""}
+                placeholder="仅保存在本地"
+                onChange={(value) =>
+                  onSettings({ ...settings, intervalsApiKey: String(value) })
                 }
               />
             </label>
+            <h3>OpenAI 兼容接口</h3>
             <label>
-              备注
-              <Textarea
-                value={selected.notes ?? ""}
-                autosize={{ minRows: 2, maxRows: 5 }}
-                onChange={(value) => updateTemplate({ notes: String(value) })}
+              请求地址
+              <Input
+                value={settings.aiEndpoint ?? ""}
+                placeholder="填写接口地址"
+                onChange={(value) =>
+                  onSettings({ ...settings, aiEndpoint: String(value) })
+                }
               />
             </label>
-            <div className="action-row">
+            <div className="form-grid">
+              <PickerField
+                label="ChatGPT 模型"
+                value={settings.aiModel || DEFAULT_AI_MODEL}
+                options={CHATGPT_MODEL_OPTIONS}
+                onChange={(aiModel) => onSettings({ ...settings, aiModel })}
+              />
+              <label>
+                API Key
+                <Input
+                  type="password"
+                  value={settings.aiApiKey ?? ""}
+                  placeholder="仅保存在本地"
+                  onChange={(value) =>
+                    onSettings({ ...settings, aiApiKey: String(value) })
+                  }
+                />
+              </label>
+            </div>
+          </div>
+        </>
+      )}
+
+      {view === "templates" && (
+        <>
+          <SettingsSubpageHeader
+            title="训练模板"
+            subtitle="模板会影响新建或套用计划时的标题、强度、说明和饮食提示。"
+            onBack={() => setView("main")}
+          />
+          <div className="panel template-panel">
+            <div className="section-head">
+              <h2>训练模板</h2>
               <Button
+                size="small"
+                shape="round"
+                theme="primary"
                 variant="outline"
-                icon={<RotateCcw size={17} />}
-                onClick={resetTemplates}
+                icon={<Plus size={17} />}
+                onClick={addTemplate}
               >
-                恢复默认
-              </Button>
-              <Button
-                theme="danger"
-                variant="outline"
-                icon={<Trash2 size={17} />}
-                onClick={deleteTemplate}
-                disabled={templates.length <= 1}
-              >
-                删除模板
+                新增
               </Button>
             </div>
-          </>
-        )}
-      </div>
+            {selected && (
+              <>
+                <PickerField
+                  label="选择模板"
+                  value={selected.id}
+                  options={templates.map((template) => ({
+                    label: template.name,
+                    value: template.id,
+                  }))}
+                  onChange={setSelectedId}
+                />
+                <div className="form-grid">
+                  <label>
+                    模板名
+                    <Input
+                      value={selected.name}
+                      clearable
+                      onChange={(value) =>
+                        updateTemplate({ name: String(value) })
+                      }
+                    />
+                  </label>
+                  <PickerField
+                    label="类型"
+                    value={
+                      selected.kind === "strength" ? "recovery" : selected.kind
+                    }
+                    options={TRAINING_KIND_OPTIONS}
+                    onChange={(value) => applyKindPreset(value as TrainingKind)}
+                  />
+                </div>
+                <div className="toggle-row">
+                  <div>
+                    <strong>力量训练</strong>
+                    <span>打开后可和恢复、Z2、甜区等类型组合</span>
+                  </div>
+                  <Switch
+                    size="small"
+                    value={Boolean(selected.exercises?.length)}
+                    onChange={(value) => toggleStrength(Boolean(value))}
+                  />
+                </div>
+                <label>
+                  计划标题
+                  <Input
+                    value={selected.title}
+                    clearable
+                    onChange={(value) =>
+                      updateTemplate({ title: String(value) })
+                    }
+                  />
+                </label>
+                {selected.kind !== "rest" && (
+                  <div className="form-grid">
+                    <label>
+                      时长（分钟）
+                      <Input
+                        type="number"
+                        value={selected.durationMinutes ?? ""}
+                        onChange={(value) =>
+                          updateTemplate({ durationMinutes: Number(value) })
+                        }
+                      />
+                    </label>
+                    <label>
+                      FTP百分比
+                      <Input
+                        value={formatRangePercent(selected.rangePercent)}
+                        placeholder="例如 63-72"
+                        onChange={(value) =>
+                          updateTemplate({
+                            rangePercent: parseRangePercent(String(value)),
+                          })
+                        }
+                      />
+                    </label>
+                  </div>
+                )}
+                {selected.kind !== "rest" && (
+                  <PlanSegmentEditor
+                    segments={
+                      selected.segments ??
+                      buildDefaultSegmentsForPlan({
+                        kind: selected.kind,
+                        durationMinutes: selected.durationMinutes,
+                        powerRange: selected.rangePercent
+                          ? [
+                              Math.round(
+                                selected.rangePercent[0] * settings.ftp,
+                              ),
+                              Math.round(
+                                selected.rangePercent[1] * settings.ftp,
+                              ),
+                            ]
+                          : undefined,
+                      }) ??
+                      []
+                    }
+                    defaultPowerRange={
+                      selected.rangePercent
+                        ? [
+                            Math.round(selected.rangePercent[0] * settings.ftp),
+                            Math.round(selected.rangePercent[1] * settings.ftp),
+                          ]
+                        : undefined
+                    }
+                    onChange={(segments) => updateTemplate({ segments })}
+                  />
+                )}
+                {Boolean(selected.exercises?.length) && (
+                  <label>
+                    动作清单（每行：动作 | 组数 | 次数）
+                    <Textarea
+                      value={formatExercises(selected.exercises)}
+                      autosize={{ minRows: 4, maxRows: 8 }}
+                      onChange={(value) =>
+                        updateTemplate({
+                          exercises: parseExercises(String(value)),
+                        })
+                      }
+                    />
+                  </label>
+                )}
+                <label>
+                  骑行说明
+                  <Textarea
+                    value={selected.rideDetails ?? ""}
+                    autosize={{ minRows: 2, maxRows: 5 }}
+                    onChange={(value) =>
+                      updateTemplate({ rideDetails: String(value) })
+                    }
+                  />
+                </label>
+                <label>
+                  饮食提示
+                  <Textarea
+                    value={selected.nutrition ?? ""}
+                    autosize={{ minRows: 2, maxRows: 5 }}
+                    onChange={(value) =>
+                      updateTemplate({ nutrition: String(value) })
+                    }
+                  />
+                </label>
+                <label>
+                  备注
+                  <Textarea
+                    value={selected.notes ?? ""}
+                    autosize={{ minRows: 2, maxRows: 5 }}
+                    onChange={(value) =>
+                      updateTemplate({ notes: String(value) })
+                    }
+                  />
+                </label>
+                <div className="action-row">
+                  <Button
+                    variant="outline"
+                    icon={<RotateCcw size={17} />}
+                    onClick={resetTemplates}
+                  >
+                    恢复默认
+                  </Button>
+                  <Button
+                    theme="danger"
+                    variant="outline"
+                    icon={<Trash2 size={17} />}
+                    onClick={deleteTemplate}
+                    disabled={templates.length <= 1}
+                  >
+                    删除模板
+                  </Button>
+                </div>
+              </>
+            )}
+          </div>
+        </>
+      )}
 
-      <div className="panel">
-        <h2>数据管理</h2>
-        <BackupStatus lastBackupAt={settings.lastBackupAt} />
-        <LocalDataSize
-          settings={settings}
-          plans={plans}
-          bodyEntries={bodyEntries}
-          checkins={checkins}
-          trainingLogs={trainingLogs}
-          activityAnalyses={activityAnalyses}
-          dayMemos={dayMemos}
-          lastFatigueReport={lastFatigueReport}
-          templates={templates}
-        />
-        <div className="action-list">
-          <Button
-            block
-            variant="outline"
-            icon={<Download size={18} />}
-            onClick={onExport}
-          >
-            导出 JSON 备份
-          </Button>
-          <label className="file-button">
-            <Upload size={18} />
-            导入 JSON 恢复
-            <input
-              type="file"
-              accept="application/json"
-              onChange={(event) => {
-                const file = event.target.files?.[0];
-                if (file) onImport(file);
-                event.currentTarget.value = "";
-              }}
-            />
-          </label>
-          <Button
-            block
-            theme="danger"
-            variant="outline"
-            icon={<RotateCcw size={18} />}
-            onClick={onClear}
-          >
-            清空本地数据
-          </Button>
+      {view === "guide" && (
+        <>
+          <SettingsSubpageHeader
+            title="使用文档"
+            subtitle="从添加到桌面到日常记录、同步、AI 咨询和备份的完整说明。"
+            onBack={() => setView("main")}
+          />
+          <UserGuidePanel />
+        </>
+      )}
+
+      {view === "main" && (
+        <div className="panel">
+          <h2>数据管理</h2>
+          <BackupStatus lastBackupAt={settings.lastBackupAt} />
+          <LocalDataSize
+            settings={settings}
+            plans={plans}
+            bodyEntries={bodyEntries}
+            checkins={checkins}
+            trainingLogs={trainingLogs}
+            activityAnalyses={activityAnalyses}
+            dayMemos={dayMemos}
+            lastFatigueReport={lastFatigueReport}
+            aiCoachSession={aiCoachSession}
+            templates={templates}
+          />
+          <div className="action-list">
+            <Button
+              block
+              variant="outline"
+              icon={<Download size={18} />}
+              onClick={onExport}
+            >
+              导出 JSON 备份
+            </Button>
+            <label className="file-button">
+              <Upload size={18} />
+              导入 JSON 恢复
+              <input
+                type="file"
+                accept="application/json"
+                onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  if (file) onImport(file);
+                  event.currentTarget.value = "";
+                }}
+              />
+            </label>
+            <Button
+              block
+              theme="danger"
+              variant="outline"
+              icon={<RotateCcw size={18} />}
+              onClick={() => setClearDialogStep(1)}
+            >
+              清空本地数据
+            </Button>
+          </div>
         </div>
-      </div>
+      )}
+      <Dialog
+        visible={clearDialogStep > 0}
+        title={clearDialogStep === 1 ? "清空本地数据？" : "再次确认"}
+        content={
+          <div className="dialog-copy">
+            {clearDialogStep === 1 ? (
+              <p>
+                这会清空所有本地训练计划、身体记录、打卡、备忘、设置和 API Key。
+              </p>
+            ) : (
+              <p>清空后不能撤销，只能通过之前导出的 JSON 备份恢复。</p>
+            )}
+          </div>
+        }
+        cancelBtn="取消"
+        confirmBtn={clearDialogStep === 1 ? "继续" : "确认清空"}
+        onClose={() => setClearDialogStep(0)}
+        onCancel={() => setClearDialogStep(0)}
+        onConfirm={handleClearConfirm}
+      />
     </section>
+  );
+}
+
+function SettingsSubpageHeader({
+  title,
+  subtitle,
+  onBack,
+}: {
+  title: string;
+  subtitle: string;
+  onBack: () => void;
+}) {
+  return (
+    <div className="settings-subpage-head">
+      <Button
+        size="small"
+        shape="round"
+        variant="outline"
+        icon={<ArrowLeft size={17} />}
+        onClick={onBack}
+      >
+        返回
+      </Button>
+      <div>
+        <h2>{title}</h2>
+        <p>{subtitle}</p>
+      </div>
+    </div>
+  );
+}
+
+function InstallGuide() {
+  const [installPrompt, setInstallPrompt] =
+    useState<BeforeInstallPromptEvent | null>(null);
+  const [installStatus, setInstallStatus] = useState("");
+
+  useEffect(() => {
+    const handleBeforeInstallPrompt = (event: Event) => {
+      event.preventDefault();
+      setInstallPrompt(event as BeforeInstallPromptEvent);
+    };
+    window.addEventListener("beforeinstallprompt", handleBeforeInstallPrompt);
+    return () =>
+      window.removeEventListener(
+        "beforeinstallprompt",
+        handleBeforeInstallPrompt,
+      );
+  }, []);
+
+  const standalone =
+    window.matchMedia("(display-mode: standalone)").matches ||
+    Boolean((navigator as Navigator & { standalone?: boolean }).standalone);
+  const isIos = /iphone|ipad|ipod/i.test(navigator.userAgent);
+
+  const promptInstall = async () => {
+    if (!installPrompt) return;
+    await installPrompt.prompt();
+    const choice = await installPrompt.userChoice;
+    setInstallPrompt(null);
+    setInstallStatus(
+      choice.outcome === "accepted" ? "已开始安装流程" : "已取消安装",
+    );
+  };
+
+  return (
+    <div className="panel install-guide">
+      <div className="section-head">
+        <div>
+          <h2>添加到桌面</h2>
+          <p className="muted">把 PWA 放到主屏幕后，会像单机 App 一样打开。</p>
+        </div>
+        <Smartphone size={22} />
+      </div>
+      {standalone ? (
+        <p className="sync-success">当前已经是独立窗口模式。</p>
+      ) : (
+        <>
+          {installPrompt && (
+            <Button block theme="primary" shape="round" onClick={promptInstall}>
+              安装应用
+            </Button>
+          )}
+          <div className="install-steps">
+            <div>
+              <strong>iPhone / iPad</strong>
+              <span>用 Safari 打开，点分享按钮，选择「添加到主屏幕」。</span>
+            </div>
+            <div>
+              <strong>Android</strong>
+              <span>
+                用 Chrome 或 Edge
+                打开，点菜单，选择「安装应用」或「添加到主屏幕」。
+              </span>
+            </div>
+          </div>
+          {isIos && (
+            <p className="muted-note">
+              iOS 不会弹出安装按钮，需要从 Safari 分享菜单手动添加。
+            </p>
+          )}
+          {installStatus && <p className="sync-success">{installStatus}</p>}
+        </>
+      )}
+    </div>
+  );
+}
+
+function UserGuidePanel() {
+  const sections = [
+    {
+      title: "添加到桌面",
+      items: [
+        "iPhone / iPad：用 Safari 打开网站，点分享按钮，选择「添加到主屏幕」。",
+        "Android：用 Chrome 或 Edge 打开网站，点菜单里的「安装应用」或「添加到主屏幕」。",
+        "添加后从桌面图标打开，会以 PWA 独立窗口运行。",
+      ],
+    },
+    {
+      title: "每日使用",
+      items: [
+        "「今日」优先看今日备忘、训练计划、推荐饮食和快捷打卡。",
+        "底部快捷打卡记录训练完成、蛋白质、晚餐控制和早睡。",
+        "AI 疲劳分析会保存最后一次结果，切换页面后不会丢。",
+      ],
+    },
+    {
+      title: "训练计划",
+      items: [
+        "「计划」默认显示本周，并自动定位到今天。",
+        "每天卡片默认折叠，点「展开」后编辑模板、时长、备注和实际完成记录。",
+        "顶部完成进度点可跳到对应日期，AI 生成的计划需要先预览，再手动应用覆盖。",
+      ],
+    },
+    {
+      title: "日历与身体",
+      items: [
+        "「日历」查看每天完成情况，也能写当天备忘。",
+        "配置 Intervals.icu 后可同步单日或整月训练摘要，应用只保存分析结果。",
+        "「身体」记录体重、体脂率、腰围、胸围和备注，趋势图放在身体页下方。",
+      ],
+    },
+    {
+      title: "设置与备份",
+      items: [
+        "设置主页可以改 FTP、身高和训练目标。",
+        "外部 API、AI 配置、训练模板都放在独立子页面。",
+        "长期记录建议每周导出一次 JSON，导入前应用会先自动备份当前数据。",
+      ],
+    },
+    {
+      title: "隐私边界",
+      items: [
+        "训练、身体、打卡、备忘和 API Key 保存在当前浏览器本地。",
+        "外部同步和 AI 只在你点击对应按钮后请求。",
+        "网站已接入 51.LA 访问统计，页面访问会加载第三方统计脚本；训练和身体数据不会由本应用主动提交给 51.LA。",
+      ],
+    },
+  ];
+
+  return (
+    <div className="panel guide-panel">
+      {sections.map((section) => (
+        <section key={section.title}>
+          <h3>{section.title}</h3>
+          <ul>
+            {section.items.map((item) => (
+              <li key={item}>{item}</li>
+            ))}
+          </ul>
+        </section>
+      ))}
+    </div>
   );
 }
 
@@ -2252,6 +3225,7 @@ function LocalDataSize({
   activityAnalyses,
   dayMemos,
   lastFatigueReport,
+  aiCoachSession,
   templates,
 }: {
   settings: SettingsState;
@@ -2262,6 +3236,7 @@ function LocalDataSize({
   activityAnalyses: Record<string, ActivityAnalysis>;
   dayMemos: Record<string, DayMemo>;
   lastFatigueReport?: FatigueAnalysisReport;
+  aiCoachSession?: AiCoachSession;
   templates: TrainingTemplate[];
 }) {
   const snapshot = {
@@ -2276,6 +3251,7 @@ function LocalDataSize({
       activityAnalyses,
       dayMemos,
       lastFatigueReport,
+      aiCoachSession,
       trainingTemplates: templates,
     },
   };
@@ -2288,6 +3264,7 @@ function LocalDataSize({
     ["备忘", countRecord(dayMemos)],
     ["训练分析", countRecord(activityAnalyses)],
     ["疲劳分析", lastFatigueReport ? 1 : 0],
+    ["AI咨询", aiCoachSession?.messages.length ?? 0],
     ["模板", templates.length],
   ];
 
@@ -2636,6 +3613,67 @@ function labelPlan(plan: PlanDay) {
   return `${labelKind(plan.kind)}${plan.exercises?.length ? "+力量" : ""}`;
 }
 
+function createChatMessage(
+  role: AiChatMessage["role"],
+  content: string,
+): AiChatMessage {
+  return {
+    id: `msg-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    role,
+    content,
+    createdAt: new Date().toISOString(),
+  };
+}
+
+function isTrainingRelatedQuestion(value: string) {
+  const text = value.trim().toLowerCase();
+  if (!text) return false;
+  const keywords = [
+    "训练",
+    "计划",
+    "练",
+    "不练",
+    "安排",
+    "调整",
+    "今天",
+    "明天",
+    "后天",
+    "本周",
+    "下周",
+    "降载",
+    "加量",
+    "骑",
+    "骑行",
+    "功率",
+    "ftp",
+    "tss",
+    "ctl",
+    "atl",
+    "tsb",
+    "疲劳",
+    "恢复",
+    "休息",
+    "z2",
+    "甜区",
+    "阈值",
+    "有氧",
+    "力量",
+    "rpe",
+    "心率",
+    "踏频",
+    "蛋白",
+    "饮食",
+    "晚餐",
+    "睡眠",
+    "体重",
+    "腰围",
+    "减脂",
+    "强度",
+    "间歇",
+  ];
+  return keywords.some((keyword) => text.includes(keyword));
+}
+
 function countRecord(record: Record<string, unknown>) {
   return Object.values(record).filter((item) => {
     if (!item) return false;
@@ -2725,92 +3763,6 @@ const BMI_RANGES = [
     hint: "这是需要重点关注的区间，建议以腰围和周均体重一起跟踪。",
   },
 ] as const;
-
-function buildTemplatePreset(
-  kind: TrainingKind,
-  hasStrength: boolean,
-): Partial<TrainingTemplate> {
-  const strengthPatch = hasStrength
-    ? {
-        exercises: defaultStrengthExercises(),
-        strengthDurationLabel: "20-25分钟",
-      }
-    : {
-        exercises: undefined,
-        strengthDurationLabel: "",
-      };
-
-  const map: Record<TrainingKind, Partial<TrainingTemplate>> = {
-    recovery: {
-      title: hasStrength ? "恢复骑 + 力量" : "恢复骑",
-      durationMinutes: 45,
-      durationLabel: "40-50分钟",
-      rangePercent: [85 / 175, 100 / 175],
-      rideDetails: "轻松恢复，目标85-100W。",
-      nutrition:
-        "恢复/Z2：出门前可少吃，半根到1根香蕉即可。训练后补20-35g蛋白质，加适量主食。",
-      notes: "保持能完整说话，不为打卡硬骑。",
-    },
-    z2: {
-      title: hasStrength ? "Z2耐力 + 力量" : "Z2耐力",
-      durationMinutes: 60,
-      durationLabel: "60分钟",
-      rangePercent: [110 / 175, 125 / 175],
-      rideDetails: "稳定耐力骑，目标110-125W。",
-      nutrition: "Z2 日可以少量碳水启动，训练后补20-35g蛋白质和适量主食。",
-      notes: "控制强度，不追速度。",
-    },
-    aerobic: {
-      title: hasStrength ? "有氧骑 + 力量" : "有氧骑",
-      durationMinutes: 60,
-      durationLabel: "45-60分钟",
-      rangePercent: [98 / 175, 131 / 175],
-      rideDetails: "以舒适有氧为主，保持稳定踏频。",
-      nutrition: "训练前少量碳水即可，训练后补足蛋白质。",
-      notes: "重点是稳定完成。",
-    },
-    sweetspot: {
-      title: hasStrength ? "甜区训练 + 力量" : "甜区 3x8分钟",
-      durationMinutes: 60,
-      durationLabel: "约60分钟",
-      rangePercent: [155 / 175, 162 / 175],
-      rideDetails: "3x8分钟，目标155-162W，组间4分钟轻松骑。",
-      nutrition: "甜区训练前补20-40g碳水，训练后补20-35g蛋白质和适量主食。",
-      notes: "不要第一组冲太高，后两组保持稳定。",
-    },
-    threshold: {
-      title: hasStrength ? "阈值训练 + 力量" : "阈值训练",
-      durationMinutes: 55,
-      durationLabel: "约55分钟",
-      rangePercent: [166 / 175, 172 / 175],
-      rideDetails: "目标166-172W，作为关键训练使用。",
-      nutrition: "阈值训练前补20-40g碳水，训练后及时补蛋白质和主食。",
-      notes: "疲劳时不要硬上强度。",
-    },
-    rest: {
-      title: hasStrength ? "休息 + 力量" : "休息",
-      durationMinutes: undefined,
-      durationLabel: "",
-      rangePercent: undefined,
-      rideDetails: "",
-      nutrition: "休息日也保证蛋白质，晚餐简单清淡即可。",
-      notes: "睡眠、拉伸、散步即可。",
-    },
-    strength: {},
-  };
-
-  return { ...map[kind], ...strengthPatch };
-}
-
-function defaultStrengthExercises() {
-  return [
-    { name: "徒手深蹲", sets: 3, reps: "8-12次" },
-    { name: "墙壁/桌边俯卧撑", sets: 3, reps: "6-10次" },
-    { name: "臀桥", sets: 3, reps: "12-15次" },
-    { name: "死虫", sets: 2, reps: "6次/边" },
-    { name: "平板支撑", sets: 2, reps: "20-30秒" },
-  ];
-}
 
 function calculateBmi(weightKg?: string, heightCm?: string) {
   const weight = numeric(weightKg);

@@ -1,10 +1,14 @@
-import { DEFAULT_AI_MODEL } from "./model";
+import { DEFAULT_AI_MODEL, buildDefaultSegmentsForPlan } from "./model";
 import type {
   ActivityAnalysis,
+  AiChatMessage,
+  AiPlanPatch,
   Checkins,
   Exercise,
+  FatigueAnalysisReport,
   FatigueLoadMetrics,
   PlanDay,
+  PlanSegment,
   SettingsState,
   TrainingKind,
   TrainingLog,
@@ -25,10 +29,34 @@ type IntervalsActivity = {
   start_date?: string;
 };
 
+type IntervalsPlanEvent = {
+  category: "WORKOUT" | "NOTE";
+  start_date_local: string;
+  external_id: string;
+  name: string;
+  description: string;
+  type?: "Ride" | "WeightTraining";
+  moving_time?: number;
+  icu_training_load?: number;
+  color?: string;
+};
+
 export type AiTrainingRecommendation = {
   summary: string;
   plans: PlanDay[];
   rawText: string;
+};
+
+export type AiCoachReply = {
+  message: string;
+  planPatch?: AiPlanPatch;
+  rawText: string;
+};
+
+export type IntervalsPlanPushResult = {
+  requested: number;
+  synced: number;
+  events: unknown[];
 };
 
 export type TrainingHistorySummary = {
@@ -139,22 +167,57 @@ export async function syncIntervalsRangeAnalysis({
   );
 }
 
+export async function pushIntervalsWeekPlan({
+  settings,
+  plans,
+}: {
+  settings: SettingsState;
+  plans: PlanDay[];
+}): Promise<IntervalsPlanPushResult> {
+  if (!plans.length) {
+    throw new Error("当前没有可同步的计划。");
+  }
+
+  const events = plans.map((plan) => buildIntervalsPlanEvent(plan, settings.ftp));
+  const base = getIntervalsBase(settings);
+  const athleteId = getIntervalsAthleteId(settings);
+  const url = `${base}/athlete/${encodeURIComponent(athleteId)}/events/bulk?upsert=true`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      Authorization: getIntervalsAuthHeader(settings),
+    },
+    body: JSON.stringify(events),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Intervals.icu 写入计划失败：${response.status} ${response.statusText}`);
+  }
+
+  const payload = await response.json().catch(() => []);
+  const returnedEvents = Array.isArray(payload) ? payload : [];
+  return {
+    requested: events.length,
+    synced: returnedEvents.length || events.length,
+    events: returnedEvents,
+  };
+}
+
 async function fetchIntervalsActivities(
   settings: SettingsState,
   oldest: string,
   newest: string,
 ) {
-  if (!settings.intervalsApiKey?.trim() || !settings.intervalsAthleteId?.trim()) {
-    throw new Error("请先在设置里填写 Intervals.icu Athlete ID 和 API Key。");
-  }
-
-  const base = (settings.intervalsApiBase || "https://intervals.icu/api/v1").replace(/\/$/, "");
+  const base = getIntervalsBase(settings);
+  const athleteId = getIntervalsAthleteId(settings);
   const params = new URLSearchParams({ oldest, newest });
-  const url = `${base}/athlete/${encodeURIComponent(settings.intervalsAthleteId.trim())}/activities?${params.toString()}`;
+  const url = `${base}/athlete/${encodeURIComponent(athleteId)}/activities?${params.toString()}`;
   const response = await fetch(url, {
     headers: {
       Accept: "application/json",
-      Authorization: `Basic ${btoa(`API_KEY:${settings.intervalsApiKey.trim()}`)}`,
+      Authorization: getIntervalsAuthHeader(settings),
     },
   });
 
@@ -164,6 +227,173 @@ async function fetchIntervalsActivities(
 
   const payload = await response.json();
   return normalizeActivities(payload);
+}
+
+function getIntervalsBase(settings: SettingsState) {
+  return (settings.intervalsApiBase || "https://intervals.icu/api/v1").replace(/\/$/, "");
+}
+
+function getIntervalsAthleteId(settings: SettingsState) {
+  if (!settings.intervalsApiKey?.trim() || !settings.intervalsAthleteId?.trim()) {
+    throw new Error("请先在设置里填写 Intervals.icu Athlete ID 和 API Key。");
+  }
+  return settings.intervalsAthleteId.trim();
+}
+
+function getIntervalsAuthHeader(settings: SettingsState) {
+  if (!settings.intervalsApiKey?.trim()) {
+    throw new Error("请先在设置里填写 Intervals.icu API Key。");
+  }
+  return `Basic ${btoa(`API_KEY:${settings.intervalsApiKey.trim()}`)}`;
+}
+
+function buildIntervalsPlanEvent(plan: PlanDay, ftp: number): IntervalsPlanEvent {
+  const hasRide = plan.kind !== "rest" && Boolean(plan.durationMinutes);
+  const hasStrength = Boolean(plan.exercises?.length);
+  const description = buildIntervalsWorkoutDescription(plan, ftp);
+
+  if (!hasRide && !hasStrength) {
+    return {
+      category: "NOTE",
+      start_date_local: `${plan.date}T00:00:00`,
+      external_id: `wk-sport-app-plan-${plan.date}`,
+      name: plan.title || "休息",
+      description,
+      color: "gray",
+    };
+  }
+
+  const movingTime =
+    (hasRide ? plan.durationMinutes ?? 0 : inferStrengthMinutes(plan.strengthDurationLabel)) * 60;
+  const trainingLoad = estimatePlannedTrainingLoad(plan, ftp);
+
+  return {
+    category: "WORKOUT",
+    start_date_local: `${plan.date}T00:00:00`,
+    external_id: `wk-sport-app-plan-${plan.date}`,
+    name: plan.title || labelPlanKind(plan.kind),
+    description,
+    type: hasRide ? "Ride" : "WeightTraining",
+    moving_time: movingTime || undefined,
+    icu_training_load: trainingLoad,
+  };
+}
+
+function buildIntervalsWorkoutDescription(plan: PlanDay, ftp: number) {
+  const lines = [
+    plan.title,
+    `类型：${labelPlanKind(plan.kind)}${plan.exercises?.length ? " + 力量" : ""}`,
+  ];
+
+  if (plan.kind !== "rest" && plan.durationMinutes) {
+    lines.push("");
+    lines.push("Workout");
+    for (const step of buildWorkoutStepLines(plan, ftp)) {
+      lines.push(`- ${step}`);
+    }
+  }
+
+  if (plan.powerRange) {
+    const [low, high] = plan.powerRange;
+    lines.push(`目标功率：${low}-${high}W`);
+  }
+  if (plan.rideDetails) lines.push(`骑行说明：${plan.rideDetails}`);
+  if (plan.exercises?.length) {
+    lines.push("");
+    lines.push("力量训练：");
+    for (const exercise of plan.exercises) {
+      lines.push(`- ${exercise.name} ${exercise.sets}组 x ${exercise.reps}`);
+    }
+  }
+  if (plan.nutrition) lines.push(`饮食提示：${plan.nutrition}`);
+  if (plan.notes) lines.push(`备注：${plan.notes}`);
+  lines.push("");
+  lines.push("来源：wk-sport-app");
+
+  return lines.filter(Boolean).join("\n");
+}
+
+function buildWorkoutStepLines(plan: PlanDay, ftp: number) {
+  if (plan.segments?.length) {
+    return plan.segments.flatMap((segment) => {
+      const target = segment.targetPowerRange
+        ? formatPowerRangeTarget(segment.targetPowerRange, ftp)
+        : formatPowerTarget(plan, ftp);
+      const line = `${segment.repeat ? `${segment.repeat}x ` : ""}${segment.durationMinutes ?? ""}m ${target} ${segment.name}`.trim();
+      const recovery = segment.recoveryMinutes
+        ? `${segment.recoveryMinutes}m ${
+            segment.recoveryPowerRange
+              ? formatPowerRangeTarget(segment.recoveryPowerRange, ftp)
+              : "50%"
+          } 组间恢复`
+        : "";
+      return recovery ? [line, recovery] : [line];
+    });
+  }
+
+  const duration = plan.durationMinutes ?? 0;
+  const target = formatPowerTarget(plan, ftp);
+
+  if (plan.kind === "sweetspot" && duration >= 45) {
+    const cooldown = Math.max(duration - 46, 5);
+    return ["10m 55%", "Main set 3x", `${8}m ${target}`, "4m 50%", `${cooldown}m 55%`];
+  }
+
+  if (plan.kind === "threshold" && duration >= 45) {
+    const work = Math.max(duration - 20, 20);
+    return ["10m 55%", `${work}m ${target}`, "10m 55%"];
+  }
+
+  return [`${duration}m ${target}`];
+}
+
+function formatPowerTarget(plan: PlanDay, ftp: number) {
+  if (!plan.powerRange || !ftp) return "Z2";
+  return formatPowerRangeTarget(plan.powerRange, ftp);
+}
+
+function formatPowerRangeTarget(range: [number, number], ftp: number) {
+  if (!ftp) return `${range[0]}-${range[1]}W`;
+  const averagePower = (range[0] + range[1]) / 2;
+  return `${Math.round((averagePower / ftp) * 100)}%`;
+}
+
+function estimatePlannedTrainingLoad(plan: PlanDay, ftp: number) {
+  if (!plan.durationMinutes) return plan.exercises?.length ? 15 : undefined;
+  const intensity = plan.powerRange?.length
+    ? ((plan.powerRange[0] + plan.powerRange[1]) / 2) / ftp
+    : plan.kind === "threshold"
+      ? 0.95
+      : plan.kind === "sweetspot"
+        ? 0.9
+        : plan.kind === "z2" || plan.kind === "aerobic"
+          ? 0.68
+          : plan.kind === "recovery"
+            ? 0.55
+            : 0.5;
+  const load = Math.round((plan.durationMinutes / 60) * intensity * intensity * 100);
+  return plan.exercises?.length ? load + 15 : load;
+}
+
+function inferStrengthMinutes(value?: string) {
+  const numbers = (value ?? "")
+    .match(/\d+/g)
+    ?.map((item) => Number(item))
+    .filter((item) => Number.isFinite(item));
+  if (!numbers?.length) return 25;
+  return Math.round(numbers.reduce((sum, item) => sum + item, 0) / numbers.length);
+}
+
+function labelPlanKind(kind: TrainingKind) {
+  return {
+    recovery: "恢复",
+    z2: "Z2",
+    aerobic: "有氧",
+    sweetspot: "甜区",
+    threshold: "阈值",
+    rest: "休息",
+    strength: "力量",
+  }[kind];
 }
 
 export async function requestAiTrainingRecommendation({
@@ -202,8 +432,8 @@ export async function requestAiTrainingRecommendation({
     "当前 FTP：" + settings.ftp + "W。",
     "要求：中文，克制，不要建议过度训练；如果数据不足，要明确说明。",
     "输出必须是纯 JSON，不要 Markdown，不要代码块，不要额外解释。",
-    'JSON 格式：{"summary":"给用户看的简短说明","days":[{"date":"YYYY-MM-DD","title":"训练标题","kind":"recovery|z2|aerobic|sweetspot|threshold|rest","durationMinutes":60,"durationLabel":"60分钟","powerRange":[110,125],"rideDetails":"骑行说明","exercises":[{"name":"动作","sets":3,"reps":"8-12次"}],"strengthDurationLabel":"20-25分钟","notes":"备注","nutrition":"饮食提示"}]}',
-    "days 必须覆盖当前周 7 天，并且 date 必须使用当前周计划里的日期。力量训练用 exercises 表示，可以和任意骑行类型组合；休息日可以不填 durationMinutes 和 powerRange。",
+    'JSON 格式：{"summary":"给用户看的简短说明","days":[{"date":"YYYY-MM-DD","title":"训练标题","kind":"recovery|z2|aerobic|sweetspot|threshold|rest","durationMinutes":60,"durationLabel":"60分钟","powerRange":[110,125],"segments":[{"name":"热身","durationMinutes":10,"targetPowerRange":[90,110]},{"name":"甜区主训练","durationMinutes":8,"targetPowerRange":[155,162],"repeat":3,"recoveryMinutes":4,"recoveryPowerRange":[85,100],"notes":"组间轻松骑"},{"name":"冷身","durationMinutes":10,"targetPowerRange":[85,100]}],"rideDetails":"骑行说明","exercises":[{"name":"动作","sets":3,"reps":"8-12次"}],"strengthDurationLabel":"20-25分钟","notes":"备注","nutrition":"饮食提示"}]}',
+    "days 必须覆盖当前周 7 天，并且 date 必须使用当前周计划里的日期。骑行训练必须尽量给出 segments 表示热身、主训练、恢复、冷身；力量训练用 exercises 表示，可以和任意骑行类型组合；休息日可以不填 durationMinutes、powerRange 和 segments。",
     "当前周计划：",
     JSON.stringify(
       weekPlans.map((plan) => ({
@@ -262,6 +492,68 @@ export async function requestAiFatigueAnalysis({
     system:
       "你只提供个人训练记录辅助建议，不替代医疗建议。回答要克制、可执行，不鼓励硬撑。",
   });
+}
+
+export async function requestAiCoachChat({
+  settings,
+  question,
+  messages,
+  weekPlans,
+  analyses,
+  logs,
+  history,
+  lastFatigueReport,
+}: {
+  settings: SettingsState;
+  question: string;
+  messages: AiChatMessage[];
+  weekPlans: PlanDay[];
+  analyses: ActivityAnalysis[];
+  logs: TrainingLog[];
+  history: TrainingHistorySummary;
+  lastFatigueReport?: FatigueAnalysisReport;
+}): Promise<AiCoachReply> {
+  const prompt = [
+    "你是这个本地训练记录应用里的“训练顾问”。只回答骑行、力量训练、恢复、训练饮食执行、身体趋势和训练计划相关问题。",
+    "如果用户问无关内容，message 只回复：这个窗口只处理训练计划、恢复和执行记录相关问题。",
+    "不要修改实际完成记录、打卡、体重、体脂、腰围、胸围、FTP、Intervals.icu 同步结果和历史训练日志。",
+    "如果需要调整计划，只能通过 planPatch 给出可预览的计划修改；用户确认后应用才会覆盖计划。",
+    "输出必须是纯 JSON，不要 Markdown，不要代码块。",
+    'JSON 格式：{"message":"给用户看的简短中文回复","planPatch":{"summary":"修改摘要","scope":"day|week","changes":[{"date":"YYYY-MM-DD","after":{"title":"训练标题","kind":"recovery|z2|aerobic|sweetspot|threshold|rest","durationMinutes":60,"durationLabel":"60分钟","powerRange":[110,125],"segments":[{"name":"热身","durationMinutes":10,"targetPowerRange":[90,110]},{"name":"主训练","durationMinutes":8,"targetPowerRange":[155,162],"repeat":3,"recoveryMinutes":4,"recoveryPowerRange":[85,100]},{"name":"冷身","durationMinutes":10,"targetPowerRange":[85,100]}],"rideDetails":"骑行说明","exercises":[{"name":"动作","sets":3,"reps":"8-12次"}],"strengthDurationLabel":"20-25分钟","notes":"备注","nutrition":"饮食提示"},"reason":"为什么这么改"}]}}}',
+    "如果没有计划修改，省略 planPatch。",
+    "当前用户目标：",
+    settings.goalText?.trim() || "目标：减脂 + 提升骑行功率",
+    "当前 FTP：" + settings.ftp + "W。",
+    "本周计划 JSON：",
+    JSON.stringify(weekPlans),
+    "最近训练分析摘要 JSON：",
+    JSON.stringify(analyses),
+    "最近手动训练记录 JSON：",
+    JSON.stringify(logs),
+    "最近训练负荷与身体趋势 JSON：",
+    JSON.stringify({
+      loadMetrics: history.loadMetrics,
+      recent7: history.recent7,
+      recent14: history.recent14,
+      weekly: history.weekly,
+      body: history.body,
+      lastFatigueReport,
+    }),
+    "最近对话 JSON：",
+    JSON.stringify(messages.slice(-8).map(({ role, content }) => ({ role, content }))),
+    "用户问题：",
+    question,
+  ].join("\n");
+
+  const content = await requestOpenAiCompatibleChat({
+    settings,
+    prompt,
+    temperature: 0.35,
+    system:
+      "你是克制的训练顾问，只处理训练相关问题。回答要短，计划修改必须放在结构化 planPatch 中。",
+  });
+
+  return parseAiCoachReply(content, weekPlans);
 }
 
 async function requestOpenAiCompatibleChat({
@@ -359,6 +651,72 @@ function parseAiRecommendation(
   };
 }
 
+function parseAiCoachReply(content: string, weekPlans: PlanDay[]): AiCoachReply {
+  const parsed = extractJson(content);
+  if (!parsed) {
+    return {
+      rawText: content,
+      message: content,
+    };
+  }
+
+  const record = Array.isArray(parsed)
+    ? ({ message: "", planPatch: { changes: parsed } } as Record<string, unknown>)
+    : (parsed as Record<string, unknown>);
+  const message =
+    stringValue(record.message) ||
+    stringValue(record.reply) ||
+    stringValue(record.content) ||
+    "我看完了当前训练记录。";
+  const patchRecord = asRecord(record.planPatch ?? record.patch);
+  const rawChanges =
+    asArray(patchRecord?.changes) ??
+    asArray(patchRecord?.days) ??
+    asArray(record.changes) ??
+    asArray(record.days) ??
+    [];
+  const changes = rawChanges
+    .map((item) => sanitizePatchChange(item, weekPlans))
+    .filter(Boolean) as AiPlanPatch["changes"];
+
+  return {
+    rawText: content,
+    message,
+    planPatch: changes.length
+      ? {
+          id: `patch-${Date.now()}`,
+          createdAt: new Date().toISOString(),
+          scope:
+            stringValue(patchRecord?.scope ?? record.scope) === "day"
+              ? "day"
+              : changes.length > 1
+                ? "week"
+                : "day",
+          summary:
+            stringValue(patchRecord?.summary ?? record.summary) ||
+            "AI 建议调整训练计划",
+          changes,
+        }
+      : undefined,
+  };
+}
+
+function sanitizePatchChange(input: unknown, weekPlans: PlanDay[]) {
+  const record = asRecord(input);
+  if (!record) return undefined;
+  const date = stringValue(record.date);
+  const before = weekPlans.find((plan) => plan.date === date);
+  if (!before) return undefined;
+  const after = sanitizeAiPlanDay(record.after ?? record.plan ?? record, before);
+  if (!after) return undefined;
+  return {
+    date,
+    before,
+    after,
+    reason: stringValue(record.reason),
+  };
+}
+
 function extractJson(content: string) {
   const trimmed = content.trim();
   if (!trimmed) return undefined;
@@ -405,8 +763,9 @@ function sanitizeAiPlanDay(input: unknown, basePlan: PlanDay): PlanDay | undefin
   const durationMinutes = numberValue(
     record.durationMinutes ?? record.minutes ?? record.duration,
   );
+  const segments = normalizeSegments(record.segments ?? record.steps);
 
-  return {
+  const plan = {
     date: basePlan.date,
     templateId: undefined,
     title: stringValue(record.title) || basePlan.title,
@@ -414,6 +773,7 @@ function sanitizeAiPlanDay(input: unknown, basePlan: PlanDay): PlanDay | undefin
     durationMinutes,
     durationLabel: stringValue(record.durationLabel),
     powerRange: kind === "rest" ? undefined : powerRange,
+    segments,
     rideDetails: stringValue(record.rideDetails ?? record.ride),
     exercises,
     strengthDurationLabel: exercises?.length
@@ -421,6 +781,10 @@ function sanitizeAiPlanDay(input: unknown, basePlan: PlanDay): PlanDay | undefin
       : undefined,
     notes: stringValue(record.notes ?? record.reason),
     nutrition: stringValue(record.nutrition ?? record.diet),
+  };
+  return {
+    ...plan,
+    segments: plan.segments?.length ? plan.segments : buildDefaultSegmentsForPlan(plan),
   };
 }
 
@@ -466,6 +830,37 @@ function normalizePowerRange(value: unknown): [number, number] | undefined {
   const matches = String(value ?? "").match(/\d+(?:\.\d+)?/g);
   if (!matches || matches.length < 2) return undefined;
   return sortRange(Number(matches[0]), Number(matches[1]));
+}
+
+function normalizeSegments(value: unknown): PlanSegment[] | undefined {
+  const items = asArray(value);
+  if (!items?.length) return undefined;
+  const segments = items
+    .map((item) => {
+      const record = asRecord(item);
+      if (!record) return undefined;
+      const name = stringValue(record.name ?? record.title ?? record.label);
+      if (!name) return undefined;
+      return {
+        name,
+        durationMinutes: numberValue(
+          record.durationMinutes ?? record.minutes ?? record.duration,
+        ),
+        targetPowerRange: normalizePowerRange(
+          record.targetPowerRange ?? record.powerRange ?? record.targetPower,
+        ),
+        repeat: numberValue(record.repeat ?? record.repeats),
+        recoveryMinutes: numberValue(
+          record.recoveryMinutes ?? record.recovery ?? record.restMinutes,
+        ),
+        recoveryPowerRange: normalizePowerRange(
+          record.recoveryPowerRange ?? record.restPowerRange,
+        ),
+        notes: stringValue(record.notes ?? record.description),
+      };
+    })
+    .filter(Boolean) as PlanSegment[];
+  return segments.length ? segments : undefined;
 }
 
 function sortRange(a: number, b: number): [number, number] {
