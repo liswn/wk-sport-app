@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import {
   Button,
   Input,
+  Switch,
   TabBar,
   TabBarItem,
   Textarea,
@@ -33,6 +34,7 @@ import { addMonths, getCalendarDays } from "./calendarUtils";
 import { registerSW } from "virtual:pwa-register";
 import {
   BodyEntry,
+  ActivityAnalysis,
   Checkins,
   DEFAULT_SETTINGS,
   DayMemo,
@@ -46,6 +48,10 @@ import {
   defaultTrainingTemplates,
   getTemplate,
 } from "./model";
+import {
+  requestAiTrainingRecommendation,
+  syncIntervalsAnalysis,
+} from "./integrations";
 import {
   clearAllData,
   exportData,
@@ -83,6 +89,7 @@ function App() {
   const [bodyEntries, setBodyEntries] = useState<Record<string, BodyEntry>>({});
   const [checkins, setCheckins] = useState<Record<string, Checkins>>({});
   const [trainingLogs, setTrainingLogs] = useState<Record<string, TrainingLog>>({});
+  const [activityAnalyses, setActivityAnalyses] = useState<Record<string, ActivityAnalysis>>({});
   const [dayMemos, setDayMemos] = useState<Record<string, DayMemo>>({});
   const [trainingTemplates, setTrainingTemplates] = useState<
     TrainingTemplate[]
@@ -96,6 +103,7 @@ function App() {
       setBodyEntries(data.bodyEntries);
       setCheckins(data.checkins);
       setTrainingLogs(data.trainingLogs);
+      setActivityAnalyses(data.activityAnalyses);
       setDayMemos(data.dayMemos);
       setTrainingTemplates(data.trainingTemplates);
       setReady(true);
@@ -110,6 +118,7 @@ function App() {
       bodyEntries,
       checkins,
       trainingLogs,
+      activityAnalyses,
       dayMemos,
       trainingTemplates,
     });
@@ -120,6 +129,7 @@ function App() {
     bodyEntries,
     checkins,
     trainingLogs,
+    activityAnalyses,
     dayMemos,
     trainingTemplates,
   ]);
@@ -215,6 +225,7 @@ function App() {
               checkins={checkins}
               templates={trainingTemplates}
               weekStart={weekStart}
+              activityAnalyses={activityAnalyses}
               onWeekChange={setWeekStart}
               onPlanChange={updatePlan}
               onTemplate={applyTemplate}
@@ -231,7 +242,14 @@ function App() {
               plans={plans}
               checkins={checkins}
               dayMemos={dayMemos}
+              activityAnalyses={activityAnalyses}
               templates={trainingTemplates}
+              onAnalysisSave={(date, analysis) =>
+                setActivityAnalyses((current) => ({
+                  ...current,
+                  [date]: analysis,
+                }))
+              }
               onMemoChange={(date, text) =>
                 setDayMemos((current) => ({
                   ...current,
@@ -268,6 +286,7 @@ function App() {
                   setBodyEntries(data.bodyEntries ?? {});
                   setCheckins(data.checkins ?? {});
                   setTrainingLogs(data.trainingLogs ?? {});
+                  setActivityAnalyses(data.activityAnalyses ?? {});
                   setDayMemos(data.dayMemos ?? {});
                   setTrainingTemplates(
                     data.trainingTemplates ?? defaultTrainingTemplates,
@@ -294,6 +313,7 @@ function App() {
                 setBodyEntries({});
                 setCheckins({});
                 setTrainingLogs({});
+                setActivityAnalyses({});
                 setDayMemos({});
                 setTrainingTemplates(defaultTrainingTemplates);
               }}
@@ -344,6 +364,13 @@ function TodayPage({
 }) {
   return (
     <section className="stack today-page">
+      {memo?.text.trim() && (
+        <div className="panel memo-panel memo-alert">
+          <h3>今日备忘</h3>
+          <p>{memo?.text}</p>
+        </div>
+      )}
+
       <div className="today-card">
         <div className="type-row">
           <KindTag kind={plan.kind} />
@@ -384,10 +411,10 @@ function TodayPage({
         templates={templates}
       />
 
-      {memo?.text.trim() && (
+      {false && memo?.text.trim() && (
         <div className="panel memo-panel">
           <h3>今日备忘</h3>
-          <p>{memo.text}</p>
+          <p>{memo?.text}</p>
         </div>
       )}
 
@@ -426,7 +453,7 @@ function WeeklyReview({
   const done = weekKeys.filter((key) => checkins[key]?.trainingDone).length;
   const strength = planned.filter((plan, index) => {
     const key = weekKeys[index];
-    return plan.kind === "strength" && checkins[key]?.trainingDone;
+    return Boolean(plan.exercises?.length) && checkins[key]?.trainingDone;
   }).length;
   const actualMinutes = weekKeys.reduce(
     (sum, key) => sum + numeric(trainingLogs[key]?.actualMinutes),
@@ -497,18 +524,24 @@ function CalendarPage({
   plans,
   checkins,
   dayMemos,
+  activityAnalyses,
   templates,
+  onAnalysisSave,
   onMemoChange,
 }: {
   settings: SettingsState;
   plans: Record<string, PlanDay>;
   checkins: Record<string, Checkins>;
   dayMemos: Record<string, DayMemo>;
+  activityAnalyses: Record<string, ActivityAnalysis>;
   templates: TrainingTemplate[];
+  onAnalysisSave: (date: string, analysis: ActivityAnalysis) => void;
   onMemoChange: (date: string, text: string) => void;
 }) {
   const [monthAnchor, setMonthAnchor] = useState(() => new Date());
   const [selectedDate, setSelectedDate] = useState(todayKey());
+  const [syncing, setSyncing] = useState(false);
+  const [syncError, setSyncError] = useState("");
   const days = getCalendarDays(monthAnchor);
   const monthLabel = new Intl.DateTimeFormat("zh-CN", {
     year: "numeric",
@@ -528,6 +561,24 @@ function CalendarPage({
     settings.ftp,
     templates,
   );
+  const selectedAnalysis = activityAnalyses[selectedDate];
+
+  const handleSync = async () => {
+    setSyncError("");
+    setSyncing(true);
+    try {
+      const analysis = await syncIntervalsAnalysis({
+        settings,
+        date: selectedDate,
+        plan: selectedPlan,
+      });
+      onAnalysisSave(selectedDate, analysis);
+    } catch (error) {
+      setSyncError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setSyncing(false);
+    }
+  };
 
   return (
     <section className="stack">
@@ -599,7 +650,7 @@ function CalendarPage({
                   <strong>{day.getDate()}</strong>
                 </div>
                 <span className={`calendar-kind kind-${plan.kind}`}>
-                  {labelKind(plan.kind)}
+                  {labelPlan(plan)}
                 </span>
                 <div className="calendar-dots" aria-label={`完成 ${score}/4`}>
                   {[0, 1, 2, 3].map((item) => (
@@ -617,7 +668,34 @@ function CalendarPage({
             <p className="plan-date">{formatChineseDate(selectedDate)}</p>
             <h3>{selectedPlan.title}</h3>
           </div>
-          <KindTag kind={selectedPlan.kind} />
+          <div className="tag-row">
+            <KindTag kind={selectedPlan.kind} />
+            {selectedPlan.exercises?.length ? <span className="mini-strength">力量</span> : null}
+          </div>
+        </div>
+        <div className="sync-panel">
+          <Button
+            block
+            variant="outline"
+            loading={syncing}
+            onClick={handleSync}
+          >
+            同步 Intervals.icu 并分析差异
+          </Button>
+          {syncError && <p className="sync-error">{syncError}</p>}
+          {selectedAnalysis && (
+            <div className="analysis-card">
+              <div>
+                <span>差异度</span>
+                <strong>{selectedAnalysis.differencePercent}%</strong>
+              </div>
+              <p>{selectedAnalysis.summary}</p>
+              <p>{selectedAnalysis.suggestion}</p>
+              <small>
+                仅保存摘要分析，不保存 Intervals.icu 原始活动数据。
+              </small>
+            </div>
+          )}
         </div>
         <label>
           当天备忘
@@ -640,6 +718,7 @@ function PlanPage({
   trainingLogs,
   templates,
   weekStart,
+  activityAnalyses,
   onWeekChange,
   onPlanChange,
   onTemplate,
@@ -652,6 +731,7 @@ function PlanPage({
   trainingLogs: Record<string, TrainingLog>;
   templates: TrainingTemplate[];
   weekStart: Date;
+  activityAnalyses: Record<string, ActivityAnalysis>;
   onWeekChange: (date: Date) => void;
   onPlanChange: (date: string, patch: Partial<PlanDay>) => void;
   onTemplate: (date: string, id: string) => void;
@@ -659,6 +739,9 @@ function PlanPage({
   onTrainingLogChange: (date: string, patch: Partial<TrainingLog>) => void;
 }) {
   const week = getWeekDays(weekStart);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState("");
+  const [aiRecommendation, setAiRecommendation] = useState("");
   const completedCount = week.filter(
     (day) => checkins[dateKey(day)]?.trainingDone,
   ).length;
@@ -682,6 +765,38 @@ function PlanPage({
       block: "start",
       behavior: "smooth",
     });
+  };
+
+  const weekPlans = week.map((day) => {
+    const key = dateKey(day);
+    return withCurrentPower(
+      plans[key] ?? defaultPlanForDate(key, settings.ftp, templates),
+      settings.ftp,
+      templates,
+    );
+  });
+
+  const handleAiRecommend = async () => {
+    setAiError("");
+    setAiLoading(true);
+    try {
+      const recentKeys = Array.from({ length: 28 }, (_, index) =>
+        dateKey(addDays(new Date(), -index)),
+      );
+      const recommendation = await requestAiTrainingRecommendation({
+        settings,
+        weekPlans,
+        analyses: recentKeys
+          .map((key) => activityAnalyses[key])
+          .filter(Boolean),
+        logs: recentKeys.map((key) => trainingLogs[key]).filter(Boolean),
+      });
+      setAiRecommendation(recommendation);
+    } catch (error) {
+      setAiError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setAiLoading(false);
+    }
   };
 
   return (
@@ -725,6 +840,26 @@ function PlanPage({
         </div>
       </div>
 
+      <div className="panel ai-plan-panel">
+        <div className="section-head">
+          <h3>AI 训练建议</h3>
+          <Button
+            size="small"
+            shape="round"
+            variant="outline"
+            loading={aiLoading}
+            onClick={handleAiRecommend}
+          >
+            生成推荐
+          </Button>
+        </div>
+        <p className="muted">
+          使用最近 28 天的训练摘要分析和手动完成记录，请求你在设置里配置的 AI 接口生成训练与饮食建议。
+        </p>
+        {aiError && <p className="sync-error">{aiError}</p>}
+        {aiRecommendation && <pre>{aiRecommendation}</pre>}
+      </div>
+
       {week.map((day) => {
         const key = dateKey(day);
         const plan = withCurrentPower(
@@ -763,6 +898,26 @@ function PlanPage({
                   {checkins[key]?.trainingDone ? "已完成" : "未完成"}
                 </Button>
               </div>
+            </div>
+            <div className="toggle-row">
+              <div>
+                <strong>力量训练</strong>
+                <span>打开后可和恢复、Z2、甜区等类型组合</span>
+              </div>
+              <Switch
+                size="small"
+                value={Boolean(plan.exercises?.length)}
+                onChange={(value) =>
+                  onPlanChange(key, {
+                    exercises: Boolean(value)
+                      ? plan.exercises?.length
+                        ? plan.exercises
+                        : defaultStrengthExercises()
+                      : undefined,
+                    strengthDurationLabel: Boolean(value) ? "20-25分钟" : "",
+                  })
+                }
+              />
             </div>
             <label>
               模板
@@ -1150,6 +1305,27 @@ function SettingsPage({
     setSelectedId(defaultTrainingTemplates[0].id);
   };
 
+  const applyKindPreset = (kind: TrainingKind) => {
+    if (!selected) return;
+    const nextKind = kind === "strength" ? "recovery" : kind;
+    updateTemplate({
+      ...buildTemplatePreset(nextKind, Boolean(selected.exercises?.length)),
+      kind: nextKind,
+    });
+  };
+
+  const toggleStrength = (enabled: boolean) => {
+    updateTemplate({
+      title: enabled
+        ? selected?.title.includes("力量")
+          ? selected.title
+          : `${selected?.title ?? "训练"} + 力量`
+        : selected?.title.replace(/\s*\+\s*力量/g, "") ?? "",
+      exercises: enabled ? selected?.exercises?.length ? selected.exercises : defaultStrengthExercises() : undefined,
+      strengthDurationLabel: enabled ? selected?.strengthDurationLabel || "20-25分钟" : "",
+    });
+  };
+
   return (
     <section className="stack">
       <div className="panel">
@@ -1207,6 +1383,81 @@ function SettingsPage({
         </div>
       </div>
 
+      <div className="panel integration-panel">
+        <h2>外部同步与 AI</h2>
+        <p className="muted">
+          这些配置只保存在本机浏览器。只有你点击同步或生成推荐时，才会请求对应服务。
+        </p>
+        <h3>Intervals.icu</h3>
+        <div className="form-grid">
+          <label>
+            API 地址
+            <Input
+              value={settings.intervalsApiBase ?? ""}
+              placeholder="https://intervals.icu/api/v1"
+              onChange={(value) =>
+                onSettings({ ...settings, intervalsApiBase: String(value) })
+              }
+            />
+          </label>
+          <label>
+            Athlete ID
+            <Input
+              value={settings.intervalsAthleteId ?? ""}
+              placeholder="例如 i12345"
+              onChange={(value) =>
+                onSettings({ ...settings, intervalsAthleteId: String(value) })
+              }
+            />
+          </label>
+        </div>
+        <label>
+          Intervals.icu API Key
+          <Input
+            type="password"
+            value={settings.intervalsApiKey ?? ""}
+            placeholder="仅保存在本地"
+            onChange={(value) =>
+              onSettings({ ...settings, intervalsApiKey: String(value) })
+            }
+          />
+        </label>
+        <h3>AI 供应商</h3>
+        <label>
+          请求地址（OpenAI 兼容）
+          <Input
+            value={settings.aiEndpoint ?? ""}
+            placeholder="例如 https://api.openai.com/v1/chat/completions"
+            onChange={(value) =>
+              onSettings({ ...settings, aiEndpoint: String(value) })
+            }
+          />
+        </label>
+        <div className="form-grid">
+          <label>
+            模型
+            <Input
+              value={settings.aiModel ?? ""}
+              placeholder="例如 gpt-4o-mini"
+              onChange={(value) =>
+                onSettings({ ...settings, aiModel: String(value) })
+              }
+            />
+          </label>
+          <label>
+            API Key
+            <Input
+              type="password"
+              value={settings.aiApiKey ?? ""}
+              placeholder="仅保存在本地"
+              onChange={(value) =>
+                onSettings({ ...settings, aiApiKey: String(value) })
+              }
+            />
+          </label>
+        </div>
+      </div>
+
       <div className="panel template-panel">
         <div className="section-head">
           <h2>训练模板</h2>
@@ -1248,9 +1499,9 @@ function SettingsPage({
               <label>
                 类型
                 <select
-                  value={selected.kind}
+                  value={selected.kind === "strength" ? "recovery" : selected.kind}
                   onChange={(event) =>
-                    updateTemplate({ kind: event.target.value as TrainingKind })
+                    applyKindPreset(event.target.value as TrainingKind)
                   }
                 >
                   <option value="recovery">恢复</option>
@@ -1258,10 +1509,20 @@ function SettingsPage({
                   <option value="aerobic">有氧</option>
                   <option value="sweetspot">甜区</option>
                   <option value="threshold">阈值</option>
-                  <option value="strength">力量</option>
                   <option value="rest">休息</option>
                 </select>
               </label>
+            </div>
+            <div className="toggle-row">
+              <div>
+                <strong>力量训练</strong>
+                <span>打开后可和恢复、Z2、甜区等类型组合</span>
+              </div>
+              <Switch
+                size="small"
+                value={Boolean(selected.exercises?.length)}
+                onChange={(value) => toggleStrength(Boolean(value))}
+              />
             </div>
             <label>
               计划标题
@@ -1297,7 +1558,7 @@ function SettingsPage({
                 </label>
               </div>
             )}
-            {selected.kind === "strength" && (
+            {Boolean(selected.exercises?.length) && (
               <label>
                 动作清单（每行：动作 | 组数 | 次数）
                 <Textarea
@@ -1469,6 +1730,10 @@ function numeric(value?: string | number) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function labelPlan(plan: PlanDay) {
+  return `${labelKind(plan.kind)}${plan.exercises?.length ? "+力量" : ""}`;
+}
+
 function buildWeightTrendText(entries: Record<string, BodyEntry>) {
   const points = Object.values(entries)
     .map((entry) => ({ date: entry.date, weight: numeric(entry.weightKg) }))
@@ -1517,6 +1782,88 @@ const BMI_RANGES = [
     hint: "这是需要重点关注的区间，建议以腰围和周均体重一起跟踪。",
   },
 ] as const;
+
+function buildTemplatePreset(kind: TrainingKind, hasStrength: boolean): Partial<TrainingTemplate> {
+  const strengthPatch = hasStrength
+    ? {
+        exercises: defaultStrengthExercises(),
+        strengthDurationLabel: "20-25分钟",
+      }
+    : {
+        exercises: undefined,
+        strengthDurationLabel: "",
+      };
+
+  const map: Record<TrainingKind, Partial<TrainingTemplate>> = {
+    recovery: {
+      title: hasStrength ? "恢复骑 + 力量" : "恢复骑",
+      durationMinutes: 45,
+      durationLabel: "40-50分钟",
+      rangePercent: [85 / 175, 100 / 175],
+      rideDetails: "轻松恢复，目标85-100W。",
+      nutrition: "恢复/Z2：出门前可少吃，半根到1根香蕉即可。训练后补20-35g蛋白质，加适量主食。",
+      notes: "保持能完整说话，不为打卡硬骑。",
+    },
+    z2: {
+      title: hasStrength ? "Z2耐力 + 力量" : "Z2耐力",
+      durationMinutes: 60,
+      durationLabel: "60分钟",
+      rangePercent: [110 / 175, 125 / 175],
+      rideDetails: "稳定耐力骑，目标110-125W。",
+      nutrition: "Z2 日可以少量碳水启动，训练后补20-35g蛋白质和适量主食。",
+      notes: "控制强度，不追速度。",
+    },
+    aerobic: {
+      title: hasStrength ? "有氧骑 + 力量" : "有氧骑",
+      durationMinutes: 60,
+      durationLabel: "45-60分钟",
+      rangePercent: [98 / 175, 131 / 175],
+      rideDetails: "以舒适有氧为主，保持稳定踏频。",
+      nutrition: "训练前少量碳水即可，训练后补足蛋白质。",
+      notes: "重点是稳定完成。",
+    },
+    sweetspot: {
+      title: hasStrength ? "甜区训练 + 力量" : "甜区 3x8分钟",
+      durationMinutes: 60,
+      durationLabel: "约60分钟",
+      rangePercent: [155 / 175, 162 / 175],
+      rideDetails: "3x8分钟，目标155-162W，组间4分钟轻松骑。",
+      nutrition: "甜区训练前补20-40g碳水，训练后补20-35g蛋白质和适量主食。",
+      notes: "不要第一组冲太高，后两组保持稳定。",
+    },
+    threshold: {
+      title: hasStrength ? "阈值训练 + 力量" : "阈值训练",
+      durationMinutes: 55,
+      durationLabel: "约55分钟",
+      rangePercent: [166 / 175, 172 / 175],
+      rideDetails: "目标166-172W，作为关键训练使用。",
+      nutrition: "阈值训练前补20-40g碳水，训练后及时补蛋白质和主食。",
+      notes: "疲劳时不要硬上强度。",
+    },
+    rest: {
+      title: hasStrength ? "休息 + 力量" : "休息",
+      durationMinutes: undefined,
+      durationLabel: "",
+      rangePercent: undefined,
+      rideDetails: "",
+      nutrition: "休息日也保证蛋白质，晚餐简单清淡即可。",
+      notes: "睡眠、拉伸、散步即可。",
+    },
+    strength: {},
+  };
+
+  return { ...map[kind], ...strengthPatch };
+}
+
+function defaultStrengthExercises() {
+  return [
+    { name: "徒手深蹲", sets: 3, reps: "8-12次" },
+    { name: "墙壁/桌边俯卧撑", sets: 3, reps: "6-10次" },
+    { name: "臀桥", sets: 3, reps: "12-15次" },
+    { name: "死虫", sets: 2, reps: "6次/边" },
+    { name: "平板支撑", sets: 2, reps: "20-30秒" },
+  ];
+}
 
 function calculateBmi(weightKg?: string, heightCm?: string) {
   const weight = numeric(weightKg);

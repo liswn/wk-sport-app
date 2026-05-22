@@ -59,6 +59,23 @@ export type TrainingLog = {
   notes?: string;
 };
 
+export type ActivityAnalysis = {
+  date: string;
+  syncedAt: string;
+  activityCount: number;
+  plannedTitle: string;
+  plannedKind: TrainingKind;
+  plannedMinutes?: number;
+  plannedPowerRange?: [number, number];
+  actualMinutes?: number;
+  averagePower?: number;
+  distanceKm?: number;
+  trainingLoad?: number;
+  differencePercent: number;
+  summary: string;
+  suggestion: string;
+};
+
 export type DayMemo = {
   date: string;
   text: string;
@@ -67,6 +84,12 @@ export type DayMemo = {
 export type SettingsState = {
   ftp: number;
   heightCm?: string;
+  intervalsApiBase?: string;
+  intervalsAthleteId?: string;
+  intervalsApiKey?: string;
+  aiEndpoint?: string;
+  aiApiKey?: string;
+  aiModel?: string;
   lastBackupAt?: string;
 };
 
@@ -76,12 +99,15 @@ export type AppData = {
   bodyEntries: Record<string, BodyEntry>;
   checkins: Record<string, Checkins>;
   trainingLogs: Record<string, TrainingLog>;
+  activityAnalyses: Record<string, ActivityAnalysis>;
   dayMemos: Record<string, DayMemo>;
   trainingTemplates: TrainingTemplate[];
 };
 
 export const DEFAULT_SETTINGS: SettingsState = {
-  ftp: 175
+  ftp: 175,
+  intervalsApiBase: "https://intervals.icu/api/v1",
+  aiModel: "gpt-4o-mini"
 };
 
 const recoveryNutrition = "恢复/Z2：出门前可少吃，半根到1根香蕉即可。训练后补20-35g蛋白质，加适量主食。";
@@ -119,7 +145,7 @@ export const defaultTrainingTemplates: TrainingTemplate[] = [
     name: "周三 轻松骑 + 力量A",
     templateId: "wednesday-light-strength-a",
     title: "轻松骑 + 力量A",
-    kind: "strength",
+    kind: "recovery",
     durationMinutes: 25,
     durationLabel: "不骑或20-30分钟",
     rangePercent: [85 / 175, 95 / 175],
@@ -179,7 +205,7 @@ export const defaultTrainingTemplates: TrainingTemplate[] = [
     name: "周日 轻松骑 + 力量B",
     templateId: "sunday-easy-strength-b",
     title: "轻松骑或休息 + 力量B",
-    kind: "strength",
+    kind: "recovery",
     durationMinutes: 30,
     durationLabel: "30分钟或休息",
     rangePercent: [90 / 175, 105 / 175],
