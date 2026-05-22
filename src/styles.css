@@ -653,6 +653,37 @@ select:focus,
   background: #f8f9f5;
 }
 
+.chart-card {
+  display: grid;
+  gap: 10px;
+}
+
+.trend-switch {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+  border: 1px solid #e1e5dd;
+  border-radius: 8px;
+  background: #f7f8f3;
+  padding: 4px;
+}
+
+.trend-switch button {
+  min-height: 32px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #65716d;
+  font-size: 13px;
+  font-weight: 750;
+}
+
+.trend-switch button.active {
+  background: #ffffff;
+  color: #1f6668;
+  box-shadow: 0 1px 4px rgba(36, 50, 46, 0.08);
+}
+
 .chart-wrap {
   overflow: hidden;
   border: 1px solid #e4e8df;
