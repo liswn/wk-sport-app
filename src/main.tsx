@@ -3,6 +3,8 @@ import { createRoot } from "react-dom/client";
 import {
   Button,
   Input,
+  Picker,
+  Popup,
   Switch,
   TabBar,
   TabBarItem,
@@ -36,10 +38,14 @@ import {
   BodyEntry,
   ActivityAnalysis,
   Checkins,
+  DEFAULT_AI_MODEL,
   DEFAULT_SETTINGS,
   DayMemo,
+  type FatigueAnalysisReport,
+  type FatigueLoadMetrics,
   PlanDay,
   SettingsState,
+  SUPPORTED_CHATGPT_MODELS,
   TrainingLog,
   TrainingKind,
   TrainingTemplate,
@@ -48,9 +54,15 @@ import {
   defaultTrainingTemplates,
   getTemplate,
 } from "./model";
+import type {
+  AiTrainingRecommendation,
+  TrainingHistorySummary,
+} from "./integrations";
 import {
+  requestAiFatigueAnalysis,
   requestAiTrainingRecommendation,
   syncIntervalsAnalysis,
+  syncIntervalsRangeAnalysis,
 } from "./integrations";
 import {
   clearAllData,
@@ -80,6 +92,64 @@ import {
 registerSW({ immediate: true });
 
 type Tab = "today" | "plan" | "calendar" | "body" | "settings";
+type PickerOption = { label: string; value: string };
+
+const TRAINING_KIND_OPTIONS: PickerOption[] = [
+  { label: "恢复", value: "recovery" },
+  { label: "Z2", value: "z2" },
+  { label: "有氧", value: "aerobic" },
+  { label: "甜区", value: "sweetspot" },
+  { label: "阈值", value: "threshold" },
+  { label: "休息", value: "rest" },
+];
+
+const FEELING_OPTIONS: PickerOption[] = [
+  { label: "未记录", value: "" },
+  { label: "轻松", value: "easy" },
+  { label: "正常", value: "normal" },
+  { label: "累", value: "tired" },
+  { label: "很累", value: "very-tired" },
+];
+
+const RPE_OPTIONS: PickerOption[] = [
+  { label: "未记录", value: "" },
+  { label: "1 极轻松，几乎无压力", value: "1" },
+  { label: "2 很轻松，热身感", value: "2" },
+  { label: "3 轻松，可长时间维持", value: "3" },
+  { label: "4 稍轻松，呼吸稳定", value: "4" },
+  { label: "5 中等，有训练感", value: "5" },
+  { label: "6 稍吃力，但可控", value: "6" },
+  { label: "7 吃力，需要专注", value: "7" },
+  { label: "8 很吃力，难以久撑", value: "8" },
+  { label: "9 接近极限", value: "9" },
+  { label: "10 极限，全力输出", value: "10" },
+];
+
+const STRATEGY_OPTIONS: PickerOption[] = [
+  { label: "保守", value: "conservative" },
+  { label: "平衡", value: "balanced" },
+  { label: "积极", value: "active" },
+  { label: "激进", value: "aggressive" },
+];
+
+const GOAL_FOCUS_OPTIONS: PickerOption[] = [
+  { label: "减脂优先", value: "fat-loss" },
+  { label: "功率提升优先", value: "power" },
+  { label: "均衡推进", value: "balanced" },
+  { label: "恢复调整", value: "recovery" },
+];
+
+const CHATGPT_MODEL_OPTIONS: PickerOption[] = [
+  { label: "GPT-5.5", value: "gpt-5.5" },
+  { label: "GPT-5.4", value: "gpt-5.4" },
+  { label: "GPT-5.4 Mini", value: "gpt-5.4-mini" },
+  { label: "GPT-4o", value: "gpt-4o" },
+  { label: "GPT-4o Mini", value: "gpt-4o-mini" },
+].filter((option) =>
+  SUPPORTED_CHATGPT_MODELS.includes(
+    option.value as (typeof SUPPORTED_CHATGPT_MODELS)[number],
+  ),
+);
 
 function App() {
   const [ready, setReady] = useState(false);
@@ -88,9 +158,16 @@ function App() {
   const [plans, setPlans] = useState<Record<string, PlanDay>>({});
   const [bodyEntries, setBodyEntries] = useState<Record<string, BodyEntry>>({});
   const [checkins, setCheckins] = useState<Record<string, Checkins>>({});
-  const [trainingLogs, setTrainingLogs] = useState<Record<string, TrainingLog>>({});
-  const [activityAnalyses, setActivityAnalyses] = useState<Record<string, ActivityAnalysis>>({});
+  const [trainingLogs, setTrainingLogs] = useState<Record<string, TrainingLog>>(
+    {},
+  );
+  const [activityAnalyses, setActivityAnalyses] = useState<
+    Record<string, ActivityAnalysis>
+  >({});
   const [dayMemos, setDayMemos] = useState<Record<string, DayMemo>>({});
+  const [lastFatigueReport, setLastFatigueReport] = useState<
+    FatigueAnalysisReport | undefined
+  >();
   const [trainingTemplates, setTrainingTemplates] = useState<
     TrainingTemplate[]
   >(defaultTrainingTemplates);
@@ -105,6 +182,7 @@ function App() {
       setTrainingLogs(data.trainingLogs);
       setActivityAnalyses(data.activityAnalyses);
       setDayMemos(data.dayMemos);
+      setLastFatigueReport(data.lastFatigueReport);
       setTrainingTemplates(data.trainingTemplates);
       setReady(true);
     });
@@ -120,6 +198,7 @@ function App() {
       trainingLogs,
       activityAnalyses,
       dayMemos,
+      lastFatigueReport,
       trainingTemplates,
     });
   }, [
@@ -131,6 +210,7 @@ function App() {
     trainingLogs,
     activityAnalyses,
     dayMemos,
+    lastFatigueReport,
     trainingTemplates,
   ]);
 
@@ -161,6 +241,20 @@ function App() {
   const applyTemplate = (date: string, id: string) => {
     const template = getTemplate(id, settings.ftp, trainingTemplates);
     setPlans((current) => ({ ...current, [date]: { ...template, date } }));
+  };
+
+  const replaceWeekPlans = (nextPlans: PlanDay[]) => {
+    setPlans((current) => {
+      const next = { ...current };
+      for (const plan of nextPlans) {
+        next[plan.date] = withCurrentPower(
+          { ...plan, date: plan.date },
+          settings.ftp,
+          trainingTemplates,
+        );
+      }
+      return next;
+    });
   };
 
   const updateCheckin = (date: string, key: keyof Checkins, value: boolean) => {
@@ -213,8 +307,11 @@ function App() {
               bodyEntries={bodyEntries}
               allCheckins={checkins}
               trainingLogs={trainingLogs}
+              activityAnalyses={activityAnalyses}
+              lastFatigueReport={lastFatigueReport}
               settings={settings}
               templates={trainingTemplates}
+              onFatigueReport={setLastFatigueReport}
               onCheck={(key, value) => updateCheckin(today, key, value)}
             />
           )}
@@ -228,6 +325,7 @@ function App() {
               activityAnalyses={activityAnalyses}
               onWeekChange={setWeekStart}
               onPlanChange={updatePlan}
+              onWeekPlansReplace={replaceWeekPlans}
               onTemplate={applyTemplate}
               onTrainingDone={(date, value) =>
                 updateCheckin(date, "trainingDone", value)
@@ -244,12 +342,32 @@ function App() {
               dayMemos={dayMemos}
               activityAnalyses={activityAnalyses}
               templates={trainingTemplates}
-              onAnalysisSave={(date, analysis) =>
+              onAnalysisSave={(date, analysis) => {
                 setActivityAnalyses((current) => ({
                   ...current,
                   [date]: analysis,
-                }))
-              }
+                }));
+                setTrainingLogs((current) => ({
+                  ...current,
+                  [date]: {
+                    ...current[date],
+                    date,
+                    actualMinutes: analysis.actualMinutes
+                      ? String(analysis.actualMinutes)
+                      : current[date]?.actualMinutes,
+                    averagePower: analysis.averagePower
+                      ? String(analysis.averagePower)
+                      : current[date]?.averagePower,
+                    notes: mergeAnalysisNote(current[date]?.notes, analysis),
+                  },
+                }));
+                if (analysis.activityCount > 0) {
+                  setCheckins((current) => ({
+                    ...current,
+                    [date]: { ...current[date], trainingDone: true },
+                  }));
+                }
+              }}
               onMemoChange={(date, text) =>
                 setDayMemos((current) => ({
                   ...current,
@@ -273,6 +391,13 @@ function App() {
           {tab === "settings" && (
             <SettingsPage
               settings={settings}
+              plans={plans}
+              bodyEntries={bodyEntries}
+              checkins={checkins}
+              trainingLogs={trainingLogs}
+              activityAnalyses={activityAnalyses}
+              dayMemos={dayMemos}
+              lastFatigueReport={lastFatigueReport}
               templates={trainingTemplates}
               onSettings={setSettings}
               onTemplates={setTrainingTemplates}
@@ -288,6 +413,7 @@ function App() {
                   setTrainingLogs(data.trainingLogs ?? {});
                   setActivityAnalyses(data.activityAnalyses ?? {});
                   setDayMemos(data.dayMemos ?? {});
+                  setLastFatigueReport(data.lastFatigueReport);
                   setTrainingTemplates(
                     data.trainingTemplates ?? defaultTrainingTemplates,
                   );
@@ -315,6 +441,7 @@ function App() {
                 setTrainingLogs({});
                 setActivityAnalyses({});
                 setDayMemos({});
+                setLastFatigueReport(undefined);
                 setTrainingTemplates(defaultTrainingTemplates);
               }}
             />
@@ -339,6 +466,60 @@ function App() {
   );
 }
 
+function PickerField({
+  label,
+  value,
+  options,
+  placeholder = "请选择",
+  onChange,
+}: {
+  label: string;
+  value?: string;
+  options: PickerOption[];
+  placeholder?: string;
+  onChange: (value: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const safeOptions = options.length
+    ? options
+    : [{ label: placeholder, value: "" }];
+  const currentValue = value ?? "";
+  const current = safeOptions.find((item) => item.value === currentValue);
+
+  return (
+    <div className="picker-field">
+      <span>{label}</span>
+      <button
+        type="button"
+        className="picker-trigger"
+        onClick={() => setOpen(true)}
+      >
+        <strong>{current?.label ?? placeholder}</strong>
+        <em>选择</em>
+      </button>
+      <Popup
+        visible={open}
+        placement="bottom"
+        closeOnOverlayClick
+        onClose={() => setOpen(false)}
+      >
+        <Picker
+          title={label}
+          columns={safeOptions}
+          value={[current?.value ?? safeOptions[0].value]}
+          cancelBtn="取消"
+          confirmBtn="确定"
+          onCancel={() => setOpen(false)}
+          onConfirm={(nextValue) => {
+            onChange(String(nextValue[0] ?? ""));
+            setOpen(false);
+          }}
+        />
+      </Popup>
+    </div>
+  );
+}
+
 function TodayPage({
   plan,
   memo,
@@ -347,8 +528,11 @@ function TodayPage({
   bodyEntries,
   allCheckins,
   trainingLogs,
+  activityAnalyses,
+  lastFatigueReport,
   settings,
   templates,
+  onFatigueReport,
   onCheck,
 }: {
   plan: PlanDay;
@@ -358,10 +542,45 @@ function TodayPage({
   bodyEntries: Record<string, BodyEntry>;
   allCheckins: Record<string, Checkins>;
   trainingLogs: Record<string, TrainingLog>;
+  activityAnalyses: Record<string, ActivityAnalysis>;
+  lastFatigueReport?: FatigueAnalysisReport;
   settings: SettingsState;
   templates: TrainingTemplate[];
+  onFatigueReport: (report: FatigueAnalysisReport) => void;
   onCheck: (key: keyof Checkins, value: boolean) => void;
 }) {
+  const [fatigueLoading, setFatigueLoading] = useState(false);
+  const [fatigueError, setFatigueError] = useState("");
+
+  const handleFatigueAnalysis = async () => {
+    setFatigueError("");
+    setFatigueLoading(true);
+    try {
+      const history = buildTrainingHistorySummary({
+        settings,
+        plans,
+        checkins: allCheckins,
+        trainingLogs,
+        activityAnalyses,
+        bodyEntries,
+        templates,
+      });
+      const result = await requestAiFatigueAnalysis({ settings, history });
+      onFatigueReport({
+        date: todayKey(),
+        generatedAt: new Date().toISOString(),
+        rangeStart: history.range.start,
+        rangeEnd: history.range.end,
+        metrics: history.loadMetrics,
+        content: result,
+      });
+    } catch (error) {
+      setFatigueError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setFatigueLoading(false);
+    }
+  };
+
   return (
     <section className="stack today-page">
       {memo?.text.trim() && (
@@ -401,6 +620,41 @@ function TodayPage({
       </div>
 
       <NutritionPanel plan={plan} />
+
+      <div className="panel fatigue-panel">
+        <div className="section-head">
+          <h3>AI 疲劳分析</h3>
+          <Button
+            size="small"
+            shape="round"
+            variant="outline"
+            loading={fatigueLoading}
+            onClick={handleFatigueAnalysis}
+          >
+            分析历史
+          </Button>
+        </div>
+        <p className="muted">
+          汇总最近 42 天的实际完成、RPE、体感、Intervals.icu
+          摘要和身体趋势，再交给你配置的 AI 分析疲劳和恢复建议。
+        </p>
+        {fatigueError && <p className="sync-error">{fatigueError}</p>}
+        {lastFatigueReport && (
+          <>
+            <p className="muted-note">
+              最近分析：{formatReportTime(lastFatigueReport.generatedAt)}
+              <br></br>数据范围：{lastFatigueReport.rangeStart} 至{" "}
+              {lastFatigueReport.rangeEnd}
+            </p>
+            {lastFatigueReport.metrics && (
+              <FatigueMetricsGrid metrics={lastFatigueReport.metrics} />
+            )}
+            {lastFatigueReport.content && (
+              <pre>{lastFatigueReport.content}</pre>
+            )}
+          </>
+        )}
+      </div>
 
       <WeeklyReview
         plans={plans}
@@ -463,7 +717,9 @@ function WeeklyReview({
     .map((key) => numeric(trainingLogs[key]?.rpe))
     .filter((value) => value > 0);
   const averageRpe = rpeValues.length
-    ? (rpeValues.reduce((sum, value) => sum + value, 0) / rpeValues.length).toFixed(1)
+    ? (
+        rpeValues.reduce((sum, value) => sum + value, 0) / rpeValues.length
+      ).toFixed(1)
     : "-";
   const habits = weekKeys.flatMap((key) => {
     const item = checkins[key] ?? {};
@@ -478,11 +734,16 @@ function WeeklyReview({
     <div className="panel weekly-review">
       <div className="section-head">
         <h3>本周回顾</h3>
-        <span>{formatMonthDay(week[0])} - {formatMonthDay(week[6])}</span>
+        <span>
+          {formatMonthDay(week[0])} - {formatMonthDay(week[6])}
+        </span>
       </div>
       <div className="review-grid">
         <Metric label="训练完成" value={`${done}/${trainingDays}`} />
-        <Metric label="实际时长" value={actualMinutes ? `${actualMinutes} 分钟` : "-"} />
+        <Metric
+          label="实际时长"
+          value={actualMinutes ? `${actualMinutes} 分钟` : "-"}
+        />
         <Metric label="力量次数" value={`${strength} 次`} />
         <Metric label="平均 RPE" value={averageRpe} />
       </div>
@@ -519,6 +780,67 @@ function NutritionPanel({ plan }: { plan: PlanDay }) {
   );
 }
 
+function FatigueMetricsGrid({ metrics }: { metrics: FatigueLoadMetrics }) {
+  const cards = [
+    {
+      label: "最近单次训练负荷",
+      code: "TSS",
+      value: formatMetric(metrics.latestTss),
+      hint: metrics.latestTssDate
+        ? formatChineseDate(metrics.latestTssDate)
+        : "暂无训练负荷",
+    },
+    {
+      label: "近 7 天总负荷",
+      code: "7日 TSS",
+      value: formatMetric(metrics.last7Tss),
+      hint: "最近一周累计",
+    },
+    {
+      label: "本周训练负荷",
+      code: "周 TSS",
+      value: formatMetric(metrics.currentWeekTss),
+      hint: `上周 ${formatMetric(metrics.previousWeekTss)}`,
+    },
+    {
+      label: "长期负荷",
+      code: "CTL",
+      value: formatMetric(metrics.ctl),
+      hint: "约 42 天均值",
+    },
+    {
+      label: "疲劳负荷",
+      code: "ATL",
+      value: formatMetric(metrics.atl),
+      hint: "约 7 天均值",
+    },
+    {
+      label: "状态平衡",
+      code: "TSB",
+      value: formatSignedMetric(metrics.tsb),
+      hint: metrics.status,
+    },
+  ];
+
+  return (
+    <div className="fatigue-metrics">
+      {cards.map((card) => (
+        <div key={card.code}>
+          <span>{card.label}</span>
+          <strong>{card.value}</strong>
+          <em>
+            {card.code} · {card.hint}
+          </em>
+        </div>
+      ))}
+      <div className="fatigue-next">
+        <span>接下来建议</span>
+        <strong>{metrics.nextTraining}</strong>
+      </div>
+    </div>
+  );
+}
+
 function CalendarPage({
   settings,
   plans,
@@ -541,7 +863,9 @@ function CalendarPage({
   const [monthAnchor, setMonthAnchor] = useState(() => new Date());
   const [selectedDate, setSelectedDate] = useState(todayKey());
   const [syncing, setSyncing] = useState(false);
+  const [monthSyncing, setMonthSyncing] = useState(false);
   const [syncError, setSyncError] = useState("");
+  const [syncStatus, setSyncStatus] = useState("");
   const days = getCalendarDays(monthAnchor);
   const monthLabel = new Intl.DateTimeFormat("zh-CN", {
     year: "numeric",
@@ -565,6 +889,7 @@ function CalendarPage({
 
   const handleSync = async () => {
     setSyncError("");
+    setSyncStatus("");
     setSyncing(true);
     try {
       const analysis = await syncIntervalsAnalysis({
@@ -577,6 +902,46 @@ function CalendarPage({
       setSyncError(error instanceof Error ? error.message : String(error));
     } finally {
       setSyncing(false);
+    }
+  };
+
+  const handleMonthSync = async () => {
+    setSyncError("");
+    setSyncStatus("");
+    setMonthSyncing(true);
+    try {
+      const today = todayKey();
+      const targets = monthDays
+        .map((day) => dateKey(day))
+        .filter((key) => key <= today)
+        .map((key) => ({
+          date: key,
+          plan: withCurrentPower(
+            plans[key] ?? defaultPlanForDate(key, settings.ftp, templates),
+            settings.ftp,
+            templates,
+          ),
+        }));
+
+      if (!targets.length) {
+        setSyncStatus("这个月份还没有可同步的日期。");
+        return;
+      }
+
+      const analyses = await syncIntervalsRangeAnalysis({ settings, targets });
+      for (const analysis of analyses) {
+        onAnalysisSave(analysis.date, analysis);
+      }
+      const activityDays = analyses.filter(
+        (analysis) => analysis.activityCount > 0,
+      ).length;
+      setSyncStatus(
+        `已同步 ${targets[0].date} 至 ${targets[targets.length - 1].date}，更新 ${analyses.length} 天，其中 ${activityDays} 天有训练活动。`,
+      );
+    } catch (error) {
+      setSyncError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setMonthSyncing(false);
     }
   };
 
@@ -602,10 +967,29 @@ function CalendarPage({
         <strong>
           {completed}/{monthDays.length}
         </strong>
-        <div className="month-progress" aria-label={`本月完成率 ${completionRate}%`}>
+        <div
+          className="month-progress"
+          aria-label={`本月完成率 ${completionRate}%`}
+        >
           <span style={{ width: `${completionRate}%` }} />
         </div>
         <em>{completionRate}%</em>
+      </div>
+      <div className="panel month-sync-panel">
+        <div className="section-head">
+          <h3>Intervals.icu 批量同步</h3>
+          <Button
+            size="small"
+            shape="round"
+            variant="outline"
+            loading={monthSyncing}
+            disabled={syncing}
+            onClick={handleMonthSync}
+          >
+            同步本月
+          </Button>
+        </div>
+        {syncStatus && <p className="sync-success">{syncStatus}</p>}
       </div>
       <div className="panel calendar-panel">
         <div className="calendar-weekdays">
@@ -670,7 +1054,9 @@ function CalendarPage({
           </div>
           <div className="tag-row">
             <KindTag kind={selectedPlan.kind} />
-            {selectedPlan.exercises?.length ? <span className="mini-strength">力量</span> : null}
+            {selectedPlan.exercises?.length ? (
+              <span className="mini-strength">力量</span>
+            ) : null}
           </div>
         </div>
         <div className="sync-panel">
@@ -678,6 +1064,7 @@ function CalendarPage({
             block
             variant="outline"
             loading={syncing}
+            disabled={monthSyncing}
             onClick={handleSync}
           >
             同步 Intervals.icu 并分析差异
@@ -691,9 +1078,7 @@ function CalendarPage({
               </div>
               <p>{selectedAnalysis.summary}</p>
               <p>{selectedAnalysis.suggestion}</p>
-              <small>
-                仅保存摘要分析，不保存 Intervals.icu 原始活动数据。
-              </small>
+              <small>仅保存摘要分析，不保存 Intervals.icu 原始活动数据。</small>
             </div>
           )}
         </div>
@@ -721,6 +1106,7 @@ function PlanPage({
   activityAnalyses,
   onWeekChange,
   onPlanChange,
+  onWeekPlansReplace,
   onTemplate,
   onTrainingDone,
   onTrainingLogChange,
@@ -734,6 +1120,7 @@ function PlanPage({
   activityAnalyses: Record<string, ActivityAnalysis>;
   onWeekChange: (date: Date) => void;
   onPlanChange: (date: string, patch: Partial<PlanDay>) => void;
+  onWeekPlansReplace: (plans: PlanDay[]) => void;
   onTemplate: (date: string, id: string) => void;
   onTrainingDone: (date: string, value: boolean) => void;
   onTrainingLogChange: (date: string, patch: Partial<TrainingLog>) => void;
@@ -741,7 +1128,9 @@ function PlanPage({
   const week = getWeekDays(weekStart);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState("");
-  const [aiRecommendation, setAiRecommendation] = useState("");
+  const [aiStatus, setAiStatus] = useState("");
+  const [aiRecommendation, setAiRecommendation] =
+    useState<AiTrainingRecommendation | null>(null);
   const completedCount = week.filter(
     (day) => checkins[dateKey(day)]?.trainingDone,
   ).length;
@@ -776,8 +1165,16 @@ function PlanPage({
     );
   });
 
+  useEffect(() => {
+    setAiError("");
+    setAiStatus("");
+    setAiRecommendation(null);
+  }, [weekStart]);
+
   const handleAiRecommend = async () => {
     setAiError("");
+    setAiStatus("");
+    setAiRecommendation(null);
     setAiLoading(true);
     try {
       const recentKeys = Array.from({ length: 28 }, (_, index) =>
@@ -797,6 +1194,13 @@ function PlanPage({
     } finally {
       setAiLoading(false);
     }
+  };
+
+  const handleApplyAiPlans = () => {
+    if (!aiRecommendation?.plans.length) return;
+    onWeekPlansReplace(aiRecommendation.plans);
+    setAiStatus("已按预览覆盖本周计划，实际完成记录保持不变。");
+    setAiRecommendation(null);
   };
 
   return (
@@ -854,10 +1258,84 @@ function PlanPage({
           </Button>
         </div>
         <p className="muted">
-          使用最近 28 天的训练摘要分析和手动完成记录，请求你在设置里配置的 AI 接口生成训练与饮食建议。
+          使用最近 28 天的训练摘要分析和手动完成记录，请求你在设置里配置的 AI
+          接口生成训练与饮食建议。
         </p>
         {aiError && <p className="sync-error">{aiError}</p>}
-        {aiRecommendation && <pre>{aiRecommendation}</pre>}
+        {aiStatus && <p className="sync-success">{aiStatus}</p>}
+        {aiRecommendation && (
+          <div className="ai-preview">
+            <div className="ai-preview-head">
+              <strong>待确认计划</strong>
+              <span>
+                {aiRecommendation.plans.length ? "尚未覆盖" : "仅可浏览"}
+              </span>
+            </div>
+            <p className="ai-summary">{aiRecommendation.summary}</p>
+            {aiRecommendation.plans.length ? (
+              <div className="ai-preview-list">
+                {aiRecommendation.plans.map((plan) => (
+                  <div className="ai-preview-day" key={plan.date}>
+                    <div>
+                      <strong>{formatChineseDate(plan.date)}</strong>
+                      <span>
+                        {labelKind(plan.kind)}
+                        {plan.exercises?.length ? " + 力量" : ""}
+                      </span>
+                    </div>
+                    <h4>{plan.title}</h4>
+                    <p>
+                      {plan.durationLabel ||
+                        (plan.durationMinutes
+                          ? `${plan.durationMinutes}分钟`
+                          : "不安排骑行")}
+                      {plan.powerRange
+                        ? ` · ${plan.powerRange[0]}-${plan.powerRange[1]}W`
+                        : ""}
+                    </p>
+                    {plan.rideDetails && <p>{plan.rideDetails}</p>}
+                    {plan.exercises?.length ? (
+                      <ul>
+                        {plan.exercises.slice(0, 3).map((exercise) => (
+                          <li key={`${plan.date}-${exercise.name}`}>
+                            {exercise.name} {exercise.sets}组 x {exercise.reps}
+                          </li>
+                        ))}
+                        {plan.exercises.length > 3 && (
+                          <li>还有 {plan.exercises.length - 3} 个力量动作</li>
+                        )}
+                      </ul>
+                    ) : null}
+                    {plan.nutrition && (
+                      <p className="nutrition-note">{plan.nutrition}</p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <pre>{aiRecommendation.rawText}</pre>
+            )}
+            <div className="ai-preview-actions">
+              <Button
+                size="small"
+                shape="round"
+                variant="outline"
+                onClick={() => setAiRecommendation(null)}
+              >
+                先不应用
+              </Button>
+              <Button
+                size="small"
+                shape="round"
+                theme="primary"
+                disabled={!aiRecommendation.plans.length}
+                onClick={handleApplyAiPlans}
+              >
+                应用到本周计划
+              </Button>
+            </div>
+          </div>
+        )}
       </div>
 
       {week.map((day) => {
@@ -919,19 +1397,15 @@ function PlanPage({
                 }
               />
             </div>
-            <label>
-              模板
-              <select
-                value={plan.templateId ?? ""}
-                onChange={(event) => onTemplate(key, event.target.value)}
-              >
-                {templates.map((template) => (
-                  <option key={template.id} value={template.id}>
-                    {template.name}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <PickerField
+              label="模板"
+              value={plan.templateId ?? ""}
+              options={templates.map((template) => ({
+                label: template.name,
+                value: template.id,
+              }))}
+              onChange={(value) => onTemplate(key, value)}
+            />
             <label>
               标题
               <Input
@@ -1016,39 +1490,22 @@ function TrainingLogEditor({
             onChange={(value) => onChange({ averagePower: String(value) })}
           />
         </label>
-        <label>
-          RPE
-          <select
-            value={log.rpe ?? ""}
-            onChange={(event) => onChange({ rpe: event.target.value })}
-          >
-            <option value="">未记录</option>
-            {Array.from({ length: 10 }, (_, index) => String(index + 1)).map(
-              (value) => (
-                <option key={value} value={value}>
-                  {value}
-                </option>
-              ),
-            )}
-          </select>
-        </label>
-        <label>
-          体感
-          <select
-            value={log.feeling ?? ""}
-            onChange={(event) =>
-              onChange({
-                feeling: (event.target.value || undefined) as TrainingLog["feeling"],
-              })
-            }
-          >
-            <option value="">未记录</option>
-            <option value="easy">轻松</option>
-            <option value="normal">正常</option>
-            <option value="tired">累</option>
-            <option value="very-tired">很累</option>
-          </select>
-        </label>
+        <PickerField
+          label="RPE 主观用力"
+          value={log.rpe ?? ""}
+          options={RPE_OPTIONS}
+          onChange={(value) => onChange({ rpe: value })}
+        />
+        <PickerField
+          label="体感"
+          value={log.feeling ?? ""}
+          options={FEELING_OPTIONS}
+          onChange={(value) =>
+            onChange({
+              feeling: (value || undefined) as TrainingLog["feeling"],
+            })
+          }
+        />
       </div>
       <label>
         训练备注
@@ -1239,6 +1696,13 @@ function WeekDatePicker({
 
 function SettingsPage({
   settings,
+  plans,
+  bodyEntries,
+  checkins,
+  trainingLogs,
+  activityAnalyses,
+  dayMemos,
+  lastFatigueReport,
   templates,
   onSettings,
   onTemplates,
@@ -1247,6 +1711,13 @@ function SettingsPage({
   onClear,
 }: {
   settings: SettingsState;
+  plans: Record<string, PlanDay>;
+  bodyEntries: Record<string, BodyEntry>;
+  checkins: Record<string, Checkins>;
+  trainingLogs: Record<string, TrainingLog>;
+  activityAnalyses: Record<string, ActivityAnalysis>;
+  dayMemos: Record<string, DayMemo>;
+  lastFatigueReport?: FatigueAnalysisReport;
   templates: TrainingTemplate[];
   onSettings: (settings: SettingsState) => void;
   onTemplates: (templates: TrainingTemplate[]) => void;
@@ -1320,9 +1791,15 @@ function SettingsPage({
         ? selected?.title.includes("力量")
           ? selected.title
           : `${selected?.title ?? "训练"} + 力量`
-        : selected?.title.replace(/\s*\+\s*力量/g, "") ?? "",
-      exercises: enabled ? selected?.exercises?.length ? selected.exercises : defaultStrengthExercises() : undefined,
-      strengthDurationLabel: enabled ? selected?.strengthDurationLabel || "20-25分钟" : "",
+        : (selected?.title.replace(/\s*\+\s*力量/g, "") ?? ""),
+      exercises: enabled
+        ? selected?.exercises?.length
+          ? selected.exercises
+          : defaultStrengthExercises()
+        : undefined,
+      strengthDurationLabel: enabled
+        ? selected?.strengthDurationLabel || "20-25分钟"
+        : "",
     });
   };
 
@@ -1383,6 +1860,52 @@ function SettingsPage({
         </div>
       </div>
 
+      <div className="panel goal-panel">
+        <h2>训练目标</h2>
+        <p className="muted">
+          这里会作为 AI
+          生成训练计划和饮食建议的主要上下文，只在点击生成时发送给你配置的 AI
+          接口。
+        </p>
+        <label>
+          目标描述
+          <Textarea
+            value={settings.goalText ?? DEFAULT_SETTINGS.goalText}
+            autosize={{ minRows: 7, maxRows: 12 }}
+            onChange={(value) =>
+              onSettings({ ...settings, goalText: String(value) })
+            }
+          />
+        </label>
+        <div className="form-grid">
+          <PickerField
+            label="策略倾向"
+            value={settings.strategyLevel ?? DEFAULT_SETTINGS.strategyLevel}
+            options={STRATEGY_OPTIONS}
+            onChange={(value) =>
+              onSettings({
+                ...settings,
+                strategyLevel: value as SettingsState["strategyLevel"],
+              })
+            }
+          />
+          <PickerField
+            label="当前重点"
+            value={settings.goalFocus ?? DEFAULT_SETTINGS.goalFocus}
+            options={GOAL_FOCUS_OPTIONS}
+            onChange={(value) =>
+              onSettings({
+                ...settings,
+                goalFocus: value as SettingsState["goalFocus"],
+              })
+            }
+          />
+        </div>
+        <p className="goal-hint">
+          建议按模板写清：目标、周期、训练时间、偏好、身体目标、饮食原则和限制。策略默认“平衡”，除非你明确愿意承受更高疲劳。
+        </p>
+      </div>
+
       <div className="panel integration-panel">
         <h2>外部同步与 AI</h2>
         <p className="muted">
@@ -1422,28 +1945,24 @@ function SettingsPage({
             }
           />
         </label>
-        <h3>AI 供应商</h3>
+        <h3>OpenAI 兼容接口</h3>
         <label>
-          请求地址（OpenAI 兼容）
+          请求地址
           <Input
             value={settings.aiEndpoint ?? ""}
-            placeholder="例如 https://api.openai.com/v1/chat/completions"
+            placeholder="填写接口地址"
             onChange={(value) =>
               onSettings({ ...settings, aiEndpoint: String(value) })
             }
           />
         </label>
         <div className="form-grid">
-          <label>
-            模型
-            <Input
-              value={settings.aiModel ?? ""}
-              placeholder="例如 gpt-4o-mini"
-              onChange={(value) =>
-                onSettings({ ...settings, aiModel: String(value) })
-              }
-            />
-          </label>
+          <PickerField
+            label="ChatGPT 模型"
+            value={settings.aiModel || DEFAULT_AI_MODEL}
+            options={CHATGPT_MODEL_OPTIONS}
+            onChange={(aiModel) => onSettings({ ...settings, aiModel })}
+          />
           <label>
             API Key
             <Input
@@ -1474,19 +1993,15 @@ function SettingsPage({
         </div>
         {selected && (
           <>
-            <label>
-              选择模板
-              <select
-                value={selected.id}
-                onChange={(event) => setSelectedId(event.target.value)}
-              >
-                {templates.map((template) => (
-                  <option key={template.id} value={template.id}>
-                    {template.name}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <PickerField
+              label="选择模板"
+              value={selected.id}
+              options={templates.map((template) => ({
+                label: template.name,
+                value: template.id,
+              }))}
+              onChange={setSelectedId}
+            />
             <div className="form-grid">
               <label>
                 模板名
@@ -1496,22 +2011,14 @@ function SettingsPage({
                   onChange={(value) => updateTemplate({ name: String(value) })}
                 />
               </label>
-              <label>
-                类型
-                <select
-                  value={selected.kind === "strength" ? "recovery" : selected.kind}
-                  onChange={(event) =>
-                    applyKindPreset(event.target.value as TrainingKind)
-                  }
-                >
-                  <option value="recovery">恢复</option>
-                  <option value="z2">Z2</option>
-                  <option value="aerobic">有氧</option>
-                  <option value="sweetspot">甜区</option>
-                  <option value="threshold">阈值</option>
-                  <option value="rest">休息</option>
-                </select>
-              </label>
+              <PickerField
+                label="类型"
+                value={
+                  selected.kind === "strength" ? "recovery" : selected.kind
+                }
+                options={TRAINING_KIND_OPTIONS}
+                onChange={(value) => applyKindPreset(value as TrainingKind)}
+              />
             </div>
             <div className="toggle-row">
               <div>
@@ -1623,6 +2130,17 @@ function SettingsPage({
       <div className="panel">
         <h2>数据管理</h2>
         <BackupStatus lastBackupAt={settings.lastBackupAt} />
+        <LocalDataSize
+          settings={settings}
+          plans={plans}
+          bodyEntries={bodyEntries}
+          checkins={checkins}
+          trainingLogs={trainingLogs}
+          activityAnalyses={activityAnalyses}
+          dayMemos={dayMemos}
+          lastFatigueReport={lastFatigueReport}
+          templates={templates}
+        />
         <div className="action-list">
           <Button
             block
@@ -1725,6 +2243,390 @@ function BackupStatus({ lastBackupAt }: { lastBackupAt?: string }) {
   );
 }
 
+function LocalDataSize({
+  settings,
+  plans,
+  bodyEntries,
+  checkins,
+  trainingLogs,
+  activityAnalyses,
+  dayMemos,
+  lastFatigueReport,
+  templates,
+}: {
+  settings: SettingsState;
+  plans: Record<string, PlanDay>;
+  bodyEntries: Record<string, BodyEntry>;
+  checkins: Record<string, Checkins>;
+  trainingLogs: Record<string, TrainingLog>;
+  activityAnalyses: Record<string, ActivityAnalysis>;
+  dayMemos: Record<string, DayMemo>;
+  lastFatigueReport?: FatigueAnalysisReport;
+  templates: TrainingTemplate[];
+}) {
+  const snapshot = {
+    schema: "wk-sport-app-v1",
+    exportedAt: new Date().toISOString(),
+    data: {
+      settings,
+      plans,
+      bodyEntries,
+      checkins,
+      trainingLogs,
+      activityAnalyses,
+      dayMemos,
+      lastFatigueReport,
+      trainingTemplates: templates,
+    },
+  };
+  const bytes = new Blob([JSON.stringify(snapshot)]).size;
+  const rows = [
+    ["计划", countRecord(plans)],
+    ["身体", countRecord(bodyEntries)],
+    ["打卡", countRecord(checkins)],
+    ["训练记录", countRecord(trainingLogs)],
+    ["备忘", countRecord(dayMemos)],
+    ["训练分析", countRecord(activityAnalyses)],
+    ["疲劳分析", lastFatigueReport ? 1 : 0],
+    ["模板", templates.length],
+  ];
+
+  return (
+    <div className="data-size-card">
+      <div className="data-size-head">
+        <span>本地数据量</span>
+        <strong>{formatBytes(bytes)}</strong>
+      </div>
+      <div className="data-size-grid">
+        {rows.map(([label, count]) => (
+          <div key={label}>
+            <span>{label}</span>
+            <strong>{count}</strong>
+          </div>
+        ))}
+      </div>
+      <p>按当前可导出的 JSON 快照估算，浏览器实际占用会略有差异。</p>
+    </div>
+  );
+}
+
+type TrainingHistoryDay = TrainingHistorySummary["days"][number];
+
+function buildTrainingHistorySummary({
+  settings,
+  plans,
+  checkins,
+  trainingLogs,
+  activityAnalyses,
+  bodyEntries,
+  templates,
+}: {
+  settings: SettingsState;
+  plans: Record<string, PlanDay>;
+  checkins: Record<string, Checkins>;
+  trainingLogs: Record<string, TrainingLog>;
+  activityAnalyses: Record<string, ActivityAnalysis>;
+  bodyEntries: Record<string, BodyEntry>;
+  templates: TrainingTemplate[];
+}): TrainingHistorySummary {
+  const days = 42;
+  const keys = Array.from({ length: days }, (_, index) =>
+    dateKey(addDays(new Date(), index - days + 1)),
+  );
+  const rows: TrainingHistoryDay[] = keys.map((key) => {
+    const plan = withCurrentPower(
+      plans[key] ?? defaultPlanForDate(key, settings.ftp, templates),
+      settings.ftp,
+      templates,
+    );
+    const log = trainingLogs[key];
+    const analysis = activityAnalyses[key];
+    const checkin = checkins[key];
+    const loggedMinutes = positiveNumber(log?.actualMinutes);
+    const loggedPower = positiveNumber(log?.averagePower);
+    const rpe = positiveNumber(log?.rpe);
+    const actualMinutes = loggedMinutes ?? analysis?.actualMinutes;
+    const averagePower = loggedPower ?? analysis?.averagePower;
+    const done = Boolean(
+      checkin?.trainingDone ||
+      actualMinutes ||
+      (analysis?.activityCount && analysis.activityCount > 0),
+    );
+
+    return {
+      date: key,
+      plannedTitle: plan.title,
+      plannedKind: plan.kind,
+      plannedMinutes: plan.durationMinutes,
+      done,
+      actualMinutes,
+      averagePower,
+      rpe,
+      feeling: log?.feeling,
+      trainingLoad: analysis?.trainingLoad,
+      differencePercent: analysis?.differencePercent,
+      checkins: checkin,
+      notes: trimForAi(log?.notes, 180),
+      intervalSummary: trimForAi(analysis?.summary, 180),
+    };
+  });
+  const trainingRows = rows.filter((row) => row.done || row.actualMinutes);
+  const recent7 = rows.slice(-7);
+  const recent14 = rows.slice(-14);
+  const weekly = Array.from(groupHistoryByWeek(rows).entries()).map(
+    ([weekStart, weekRows]) => ({
+      weekStart,
+      ...summarizeHistoryRows(weekRows),
+    }),
+  );
+  const loadMetrics = buildFatigueLoadMetrics(rows, weekly);
+
+  return {
+    range: {
+      days,
+      start: keys[0],
+      end: keys[keys.length - 1],
+    },
+    goal: {
+      ftp: settings.ftp,
+      text: trimForAi(settings.goalText, 480),
+      strategy: settings.strategyLevel,
+      focus: settings.goalFocus,
+    },
+    totals: summarizeHistoryRows(trainingRows),
+    recent7: summarizeHistoryRows(recent7),
+    recent14: summarizeHistoryRows(recent14),
+    weekly,
+    body: buildBodyHistorySummary(bodyEntries),
+    loadMetrics,
+    days: rows,
+  };
+}
+
+function summarizeHistoryRows(rows: TrainingHistoryDay[]) {
+  const trainingRows = rows.filter((row) => row.done || row.actualMinutes);
+  const rpeValues = trainingRows
+    .map((row) => row.rpe)
+    .filter((value): value is number => Boolean(value));
+  const loads = trainingRows
+    .map((row) => row.trainingLoad)
+    .filter((value): value is number => Boolean(value));
+  const hardSessions = trainingRows.filter(
+    (row) =>
+      (row.rpe ?? 0) >= 7 ||
+      row.plannedKind === "sweetspot" ||
+      row.plannedKind === "threshold",
+  ).length;
+  const tiredDays = trainingRows.filter(
+    (row) =>
+      row.feeling === "tired" ||
+      row.feeling === "very-tired" ||
+      (row.rpe ?? 0) >= 8,
+  ).length;
+  const trainingLoad = loads.length
+    ? Math.round(loads.reduce((sum, value) => sum + value, 0))
+    : undefined;
+
+  return {
+    trainingDays: trainingRows.length,
+    completedDays: trainingRows.filter((row) => row.done).length,
+    actualMinutes: Math.round(
+      trainingRows.reduce((sum, row) => sum + (row.actualMinutes ?? 0), 0),
+    ),
+    averageRpe: averageNumber(rpeValues),
+    highRpeDays: trainingRows.filter((row) => (row.rpe ?? 0) >= 8).length,
+    tiredDays,
+    hardSessions,
+    totalTrainingLoad: trainingLoad,
+    trainingLoad,
+  };
+}
+
+function groupHistoryByWeek(rows: TrainingHistoryDay[]) {
+  const groups = new Map<string, TrainingHistoryDay[]>();
+  for (const row of rows) {
+    const weekStart = dateKey(getWeekDays(new Date(`${row.date}T00:00:00`))[0]);
+    groups.set(weekStart, [...(groups.get(weekStart) ?? []), row]);
+  }
+  return groups;
+}
+
+function buildFatigueLoadMetrics(
+  rows: TrainingHistoryDay[],
+  weekly: Array<{ weekStart: string; trainingLoad?: number }>,
+): FatigueLoadMetrics {
+  const dailyLoads = rows.map((row) => estimateDailyTss(row));
+  const latestIndex = findLastIndex(dailyLoads, (value) => value > 0);
+  const latestTss = latestIndex >= 0 ? dailyLoads[latestIndex] : undefined;
+  const latestTssDate = latestIndex >= 0 ? rows[latestIndex].date : undefined;
+  const last7Tss = Math.round(sumNumbers(dailyLoads.slice(-7)));
+  const currentWeekStart = dateKey(getWeekDays(new Date())[0]);
+  const currentWeekTss =
+    weekly.find((item) => item.weekStart === currentWeekStart)?.trainingLoad ??
+    0;
+  const previousWeekStart = dateKey(
+    addDays(new Date(`${currentWeekStart}T00:00:00`), -7),
+  );
+  const previousWeekTss =
+    weekly.find((item) => item.weekStart === previousWeekStart)?.trainingLoad ??
+    0;
+  const ctl = exponentialAverage(dailyLoads, 42);
+  const atl = exponentialAverage(dailyLoads, 7);
+  const tsb =
+    ctl !== undefined && atl !== undefined ? Math.round(ctl - atl) : undefined;
+  const status = labelLoadStatus(
+    tsb,
+    atl,
+    ctl,
+    dailyLoads.filter((value) => value > 0).length,
+  );
+
+  return {
+    latestTss,
+    latestTssDate,
+    last7Tss,
+    currentWeekTss,
+    previousWeekTss,
+    weeklyTss: weekly.map((item) => ({
+      weekStart: item.weekStart,
+      tss: item.trainingLoad ?? 0,
+    })),
+    ctl,
+    atl,
+    tsb,
+    status,
+    nextTraining: suggestNextTraining(tsb, atl, ctl, latestTss),
+    dataDays: rows.length,
+    loadDays: dailyLoads.filter((value) => value > 0).length,
+  };
+}
+
+function estimateDailyTss(row: TrainingHistoryDay) {
+  if (row.trainingLoad && row.trainingLoad > 0)
+    return Math.round(row.trainingLoad);
+  if (!row.actualMinutes) return 0;
+  const intensity =
+    row.plannedKind === "threshold"
+      ? 0.95
+      : row.plannedKind === "sweetspot"
+        ? 0.9
+        : row.plannedKind === "z2" || row.plannedKind === "aerobic"
+          ? 0.68
+          : row.plannedKind === "recovery"
+            ? 0.55
+            : row.rpe
+              ? Math.min(1, Math.max(0.45, row.rpe / 10))
+              : 0.5;
+  return Math.round((row.actualMinutes / 60) * intensity * intensity * 100);
+}
+
+function exponentialAverage(values: number[], days: number) {
+  if (!values.length) return undefined;
+  const alpha = 2 / (days + 1);
+  let value = values[0] ?? 0;
+  for (const next of values.slice(1)) {
+    value = value + alpha * (next - value);
+  }
+  return Math.round(value);
+}
+
+function labelLoadStatus(
+  tsb: number | undefined,
+  atl: number | undefined,
+  ctl: number | undefined,
+  loadDays: number,
+) {
+  if (loadDays < 5) return "数据不足";
+  if (tsb === undefined || atl === undefined || ctl === undefined)
+    return "数据不足";
+  if (tsb <= -18) return "需要降载";
+  if (tsb <= -8) return "偏疲劳";
+  if (tsb >= 12) return "恢复良好";
+  return "正常负荷";
+}
+
+function suggestNextTraining(
+  tsb: number | undefined,
+  atl: number | undefined,
+  ctl: number | undefined,
+  latestTss: number | undefined,
+) {
+  if (tsb === undefined || atl === undefined || ctl === undefined)
+    return "先补充同步数据";
+  if (tsb <= -18 || (latestTss ?? 0) >= 100) return "休息或恢复骑";
+  if (tsb <= -8) return "恢复骑或轻松 Z2";
+  if (tsb >= 10 && atl <= ctl + 5) return "可以安排甜区";
+  return "Z2 有氧为主";
+}
+
+function buildBodyHistorySummary(entries: Record<string, BodyEntry>) {
+  const points = Object.values(entries)
+    .map((entry) => ({
+      date: entry.date,
+      weight: positiveNumber(entry.weightKg),
+      waist: positiveNumber(entry.waistCm),
+    }))
+    .filter((entry) => entry.weight || entry.waist)
+    .sort((a, b) => a.date.localeCompare(b.date));
+  const weightPoints = points.filter((entry) => entry.weight);
+  const waistPoints = points.filter((entry) => entry.waist);
+
+  return {
+    latestWeightKg: weightPoints.at(-1)?.weight,
+    sevenDayAverageKg: averageNumber(
+      weightPoints
+        .slice(-7)
+        .map((entry) => entry.weight)
+        .filter(Boolean) as number[],
+    ),
+    fourteenDayAverageKg: averageNumber(
+      weightPoints
+        .slice(-14)
+        .map((entry) => entry.weight)
+        .filter(Boolean) as number[],
+    ),
+    latestWaistCm: waistPoints.at(-1)?.waist,
+  };
+}
+
+function averageNumber(values: number[]) {
+  if (!values.length) return undefined;
+  return Number(
+    (values.reduce((sum, value) => sum + value, 0) / values.length).toFixed(1),
+  );
+}
+
+function sumNumbers(values: number[]) {
+  return values.reduce((sum, value) => sum + value, 0);
+}
+
+function findLastIndex<T>(items: T[], predicate: (item: T) => boolean) {
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    if (predicate(items[index])) return index;
+  }
+  return -1;
+}
+
+function formatMetric(value?: number) {
+  return value === undefined ? "-" : String(Math.round(value));
+}
+
+function formatSignedMetric(value?: number) {
+  if (value === undefined) return "-";
+  return value > 0 ? `+${Math.round(value)}` : String(Math.round(value));
+}
+
+function positiveNumber(value?: string | number) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function trimForAi(value: string | undefined, maxLength: number) {
+  const text = value?.trim();
+  if (!text) return undefined;
+  return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text;
+}
+
 function numeric(value?: string | number) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : 0;
@@ -1732,6 +2634,47 @@ function numeric(value?: string | number) {
 
 function labelPlan(plan: PlanDay) {
   return `${labelKind(plan.kind)}${plan.exercises?.length ? "+力量" : ""}`;
+}
+
+function countRecord(record: Record<string, unknown>) {
+  return Object.values(record).filter((item) => {
+    if (!item) return false;
+    if (typeof item !== "object") return true;
+    return Object.values(item).some((value) => {
+      if (Array.isArray(value)) return value.length > 0;
+      return value !== undefined && value !== null && value !== "";
+    });
+  }).length;
+}
+
+function formatBytes(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`;
+  const kb = bytes / 1024;
+  if (kb < 1024) return `${kb.toFixed(kb >= 100 ? 0 : 1)} KB`;
+  return `${(kb / 1024).toFixed(2)} MB`;
+}
+
+function formatReportTime(value: string) {
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "numeric",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(value));
+}
+
+function mergeAnalysisNote(
+  currentNote: string | undefined,
+  analysis: ActivityAnalysis,
+) {
+  const marker = "[Intervals.icu]";
+  const nextNote = `${marker} ${analysis.summary} ${analysis.suggestion}`;
+  const kept = (currentNote ?? "")
+    .split("\n")
+    .filter((line) => !line.trim().startsWith(marker))
+    .join("\n")
+    .trim();
+  return kept ? `${kept}\n${nextNote}` : nextNote;
 }
 
 function buildWeightTrendText(entries: Record<string, BodyEntry>) {
@@ -1783,7 +2726,10 @@ const BMI_RANGES = [
   },
 ] as const;
 
-function buildTemplatePreset(kind: TrainingKind, hasStrength: boolean): Partial<TrainingTemplate> {
+function buildTemplatePreset(
+  kind: TrainingKind,
+  hasStrength: boolean,
+): Partial<TrainingTemplate> {
   const strengthPatch = hasStrength
     ? {
         exercises: defaultStrengthExercises(),
@@ -1801,7 +2747,8 @@ function buildTemplatePreset(kind: TrainingKind, hasStrength: boolean): Partial<
       durationLabel: "40-50分钟",
       rangePercent: [85 / 175, 100 / 175],
       rideDetails: "轻松恢复，目标85-100W。",
-      nutrition: "恢复/Z2：出门前可少吃，半根到1根香蕉即可。训练后补20-35g蛋白质，加适量主食。",
+      nutrition:
+        "恢复/Z2：出门前可少吃，半根到1根香蕉即可。训练后补20-35g蛋白质，加适量主食。",
       notes: "保持能完整说话，不为打卡硬骑。",
     },
     z2: {

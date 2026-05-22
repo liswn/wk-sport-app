@@ -81,9 +81,37 @@ export type DayMemo = {
   text: string;
 };
 
+export type FatigueLoadMetrics = {
+  latestTss?: number;
+  latestTssDate?: string;
+  last7Tss?: number;
+  currentWeekTss?: number;
+  previousWeekTss?: number;
+  weeklyTss: Array<{ weekStart: string; tss: number }>;
+  ctl?: number;
+  atl?: number;
+  tsb?: number;
+  status: string;
+  nextTraining: string;
+  dataDays: number;
+  loadDays: number;
+};
+
+export type FatigueAnalysisReport = {
+  date: string;
+  generatedAt: string;
+  rangeStart: string;
+  rangeEnd: string;
+  metrics?: FatigueLoadMetrics;
+  content: string;
+};
+
 export type SettingsState = {
   ftp: number;
   heightCm?: string;
+  goalText?: string;
+  strategyLevel?: "conservative" | "balanced" | "active" | "aggressive";
+  goalFocus?: "fat-loss" | "power" | "balanced" | "recovery";
   intervalsApiBase?: string;
   intervalsAthleteId?: string;
   intervalsApiKey?: string;
@@ -93,6 +121,15 @@ export type SettingsState = {
   lastBackupAt?: string;
 };
 
+export const DEFAULT_AI_MODEL = "gpt-5.5";
+export const SUPPORTED_CHATGPT_MODELS = [
+  "gpt-5.5",
+  "gpt-5.4",
+  "gpt-5.4-mini",
+  "gpt-4o",
+  "gpt-4o-mini",
+] as const;
+
 export type AppData = {
   settings: SettingsState;
   plans: Record<string, PlanDay>;
@@ -101,13 +138,19 @@ export type AppData = {
   trainingLogs: Record<string, TrainingLog>;
   activityAnalyses: Record<string, ActivityAnalysis>;
   dayMemos: Record<string, DayMemo>;
+  lastFatigueReport?: FatigueAnalysisReport;
   trainingTemplates: TrainingTemplate[];
 };
 
 export const DEFAULT_SETTINGS: SettingsState = {
   ftp: 175,
+  goalText:
+    "目标：减脂 + 提升骑行功率\n周期：未来 8-12 周\n当前 FTP：175W\n训练时间：工作日早上约 60 分钟，周末 75-90 分钟\n训练偏好：以骑行为主，每周 2 次新手力量训练\n身体目标：更关注体重 7 日均值和腰围趋势，不追求单日波动\n饮食原则：保证蛋白质，训练日前后不极端控碳，晚餐尽量 30 分钟内完成\n限制：不希望过度疲劳，优先长期可持续",
+  strategyLevel: "balanced",
+  goalFocus: "balanced",
   intervalsApiBase: "https://intervals.icu/api/v1",
-  aiModel: "gpt-4o-mini"
+  aiEndpoint: "",
+  aiModel: DEFAULT_AI_MODEL
 };
 
 const recoveryNutrition = "恢复/Z2：出门前可少吃，半根到1根香蕉即可。训练后补20-35g蛋白质，加适量主食。";

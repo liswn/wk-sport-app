@@ -1,4 +1,11 @@
-import { AppData, DEFAULT_SETTINGS, TrainingTemplate, defaultTrainingTemplates } from "./model";
+import {
+  AppData,
+  DEFAULT_AI_MODEL,
+  DEFAULT_SETTINGS,
+  SUPPORTED_CHATGPT_MODELS,
+  TrainingTemplate,
+  defaultTrainingTemplates,
+} from "./model";
 
 const DB_NAME = "wk-sport-local";
 const STORE_NAME = "app";
@@ -59,14 +66,31 @@ export async function clearAllData() {
 }
 
 function normalizeData(data?: Partial<AppData>): AppData {
+  const settings = { ...DEFAULT_SETTINGS, ...(data?.settings ?? {}) };
+  if (
+    settings.aiEndpoint === "https://api.54lb.com/v1/chat/completions" &&
+    !settings.aiApiKey?.trim()
+  ) {
+    settings.aiEndpoint = "";
+  }
+  if (
+    settings.aiModel?.trim() &&
+    !SUPPORTED_CHATGPT_MODELS.includes(
+      settings.aiModel.trim() as (typeof SUPPORTED_CHATGPT_MODELS)[number],
+    )
+  ) {
+    settings.aiModel = DEFAULT_AI_MODEL;
+  }
+
   return {
-    settings: { ...DEFAULT_SETTINGS, ...(data?.settings ?? {}) },
+    settings,
     plans: data?.plans ?? {},
     bodyEntries: data?.bodyEntries ?? {},
     checkins: data?.checkins ?? {},
     trainingLogs: data?.trainingLogs ?? {},
     activityAnalyses: data?.activityAnalyses ?? {},
     dayMemos: data?.dayMemos ?? {},
+    lastFatigueReport: data?.lastFatigueReport,
     trainingTemplates: mergeTrainingTemplates(data?.trainingTemplates)
   };
 }

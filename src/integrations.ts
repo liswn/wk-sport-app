@@ -1,7 +1,12 @@
-import {
+import { DEFAULT_AI_MODEL } from "./model";
+import type {
   ActivityAnalysis,
+  Checkins,
+  Exercise,
+  FatigueLoadMetrics,
   PlanDay,
   SettingsState,
+  TrainingKind,
   TrainingLog,
 } from "./model";
 import { formatChineseDate } from "./time";
@@ -20,6 +25,80 @@ type IntervalsActivity = {
   start_date?: string;
 };
 
+export type AiTrainingRecommendation = {
+  summary: string;
+  plans: PlanDay[];
+  rawText: string;
+};
+
+export type TrainingHistorySummary = {
+  range: {
+    days: number;
+    start: string;
+    end: string;
+  };
+  goal: {
+    ftp: number;
+    text?: string;
+    strategy?: SettingsState["strategyLevel"];
+    focus?: SettingsState["goalFocus"];
+  };
+  totals: {
+    trainingDays: number;
+    completedDays: number;
+    actualMinutes: number;
+    averageRpe?: number;
+    highRpeDays: number;
+    tiredDays: number;
+    hardSessions: number;
+    totalTrainingLoad?: number;
+  };
+  recent7: {
+    trainingDays: number;
+    actualMinutes: number;
+    averageRpe?: number;
+    trainingLoad?: number;
+  };
+  recent14: {
+    trainingDays: number;
+    actualMinutes: number;
+    averageRpe?: number;
+    trainingLoad?: number;
+  };
+  weekly: Array<{
+    weekStart: string;
+    trainingDays: number;
+    actualMinutes: number;
+    averageRpe?: number;
+    trainingLoad?: number;
+    hardSessions: number;
+    tiredDays: number;
+  }>;
+  body: {
+    latestWeightKg?: number;
+    sevenDayAverageKg?: number;
+    fourteenDayAverageKg?: number;
+    latestWaistCm?: number;
+  };
+  loadMetrics: FatigueLoadMetrics;
+  days: Array<{
+    date: string;
+    plannedTitle: string;
+    plannedKind: PlanDay["kind"];
+    plannedMinutes?: number;
+    done: boolean;
+    actualMinutes?: number;
+    averagePower?: number;
+    rpe?: number;
+    feeling?: TrainingLog["feeling"];
+    trainingLoad?: number;
+    differencePercent?: number;
+    checkins?: Checkins;
+    notes?: string;
+    intervalSummary?: string;
+  }>;
+};
+
 export async function syncIntervalsAnalysis({
   settings,
   date,
@@ -29,12 +108,48 @@ export async function syncIntervalsAnalysis({
   date: string;
   plan: PlanDay;
 }) {
+  const activities = (await fetchIntervalsActivities(settings, date, date)).filter((activity) =>
+    isSameLocalDate(activity, date),
+  );
+
+  return buildActivityAnalysis(date, plan, activities);
+}
+
+export async function syncIntervalsRangeAnalysis({
+  settings,
+  targets,
+}: {
+  settings: SettingsState;
+  targets: Array<{ date: string; plan: PlanDay }>;
+}) {
+  if (!targets.length) return [];
+  const sorted = [...targets].sort((a, b) => a.date.localeCompare(b.date));
+  const activities = await fetchIntervalsActivities(
+    settings,
+    sorted[0].date,
+    sorted[sorted.length - 1].date,
+  );
+
+  return sorted.map(({ date, plan }) =>
+    buildActivityAnalysis(
+      date,
+      plan,
+      activities.filter((activity) => isSameLocalDate(activity, date)),
+    ),
+  );
+}
+
+async function fetchIntervalsActivities(
+  settings: SettingsState,
+  oldest: string,
+  newest: string,
+) {
   if (!settings.intervalsApiKey?.trim() || !settings.intervalsAthleteId?.trim()) {
     throw new Error("请先在设置里填写 Intervals.icu Athlete ID 和 API Key。");
   }
 
   const base = (settings.intervalsApiBase || "https://intervals.icu/api/v1").replace(/\/$/, "");
-  const params = new URLSearchParams({ oldest: date, newest: date });
+  const params = new URLSearchParams({ oldest, newest });
   const url = `${base}/athlete/${encodeURIComponent(settings.intervalsAthleteId.trim())}/activities?${params.toString()}`;
   const response = await fetch(url, {
     headers: {
@@ -48,11 +163,7 @@ export async function syncIntervalsAnalysis({
   }
 
   const payload = await response.json();
-  const activities = normalizeActivities(payload).filter((activity) =>
-    isSameLocalDate(activity, date),
-  );
-
-  return buildActivityAnalysis(date, plan, activities);
+  return normalizeActivities(payload);
 }
 
 export async function requestAiTrainingRecommendation({
@@ -70,10 +181,29 @@ export async function requestAiTrainingRecommendation({
     throw new Error("请先在设置里填写 AI 请求地址和 API Key。");
   }
 
+  const strategyLabel = {
+    conservative: "保守：优先恢复和稳定执行，训练增加更慢",
+    balanced: "平衡：兼顾减脂、功率和恢复",
+    active: "积极：更重视进步，但仍避免硬撑",
+    aggressive: "激进：允许更高训练压力，但必须提示疲劳风险",
+  }[settings.strategyLevel ?? "balanced"];
+  const focusLabel = {
+    "fat-loss": "减脂优先",
+    power: "功率提升优先",
+    balanced: "均衡推进",
+    recovery: "恢复调整",
+  }[settings.goalFocus ?? "balanced"];
   const prompt = [
     "你是一个偏保守的骑行训练助手。请基于用户最近的训练分析摘要，为下一周给出训练计划和饮食建议。",
-    "用户目标：减脂 + 提升功率。当前 FTP：" + settings.ftp + "W。",
-    "要求：中文，简洁，按周一到周日输出；每一天包含训练类型、时长、目标功率或力量内容、饮食重点；不要建议过度训练；如果数据不足，要明确说明。",
+    "用户当前目标配置：",
+    settings.goalText?.trim() || "目标：减脂 + 提升骑行功率",
+    "策略倾向：" + strategyLabel,
+    "当前重点：" + focusLabel,
+    "当前 FTP：" + settings.ftp + "W。",
+    "要求：中文，克制，不要建议过度训练；如果数据不足，要明确说明。",
+    "输出必须是纯 JSON，不要 Markdown，不要代码块，不要额外解释。",
+    'JSON 格式：{"summary":"给用户看的简短说明","days":[{"date":"YYYY-MM-DD","title":"训练标题","kind":"recovery|z2|aerobic|sweetspot|threshold|rest","durationMinutes":60,"durationLabel":"60分钟","powerRange":[110,125],"rideDetails":"骑行说明","exercises":[{"name":"动作","sets":3,"reps":"8-12次"}],"strengthDurationLabel":"20-25分钟","notes":"备注","nutrition":"饮食提示"}]}',
+    "days 必须覆盖当前周 7 天，并且 date 必须使用当前周计划里的日期。力量训练用 exercises 表示，可以和任意骑行类型组合；休息日可以不填 durationMinutes 和 powerRange。",
     "当前周计划：",
     JSON.stringify(
       weekPlans.map((plan) => ({
@@ -93,20 +223,75 @@ export async function requestAiTrainingRecommendation({
     JSON.stringify(logs),
   ].join("\n");
 
-  const response = await fetch(settings.aiEndpoint.trim(), {
+  const content = await requestOpenAiCompatibleChat({
+    settings,
+    prompt,
+    temperature: 0.4,
+    system:
+      "你只提供个人训练记录辅助建议，不替代医疗建议。回答要可执行、克制、手机屏幕友好。",
+  });
+
+  return parseAiRecommendation(content, weekPlans);
+}
+
+export async function requestAiFatigueAnalysis({
+  settings,
+  history,
+}: {
+  settings: SettingsState;
+  history: TrainingHistorySummary;
+}) {
+  const prompt = [
+    "你是一个偏保守的骑行训练与恢复分析助手。用户可能没有完全按训练计划执行，请优先分析实际完成记录。",
+    "关键负荷数值已经由应用本地计算，请不要展开长篇建议，不要写饮食睡眠段落。",
+    "只输出 4 行以内，适合手机一眼看完：",
+    "疲劳值：0-100",
+    "判断：恢复良好 / 正常负荷 / 偏疲劳 / 需要降载 / 数据不足",
+    "下一步：休息 / 恢复骑 / Z2 / 可做甜区 / 可做阈值，给出一个明确选择",
+    "依据：一句话，引用 TSS/CTL/TSB/RPE 中最关键的 1-2 个点",
+    "用户目标：",
+    settings.goalText?.trim() || "目标：减脂 + 提升骑行功率",
+    "历史训练摘要 JSON：",
+    JSON.stringify(history),
+  ].join("\n");
+
+  return requestOpenAiCompatibleChat({
+    settings,
+    prompt,
+    temperature: 0.3,
+    system:
+      "你只提供个人训练记录辅助建议，不替代医疗建议。回答要克制、可执行，不鼓励硬撑。",
+  });
+}
+
+async function requestOpenAiCompatibleChat({
+  settings,
+  prompt,
+  system,
+  temperature,
+}: {
+  settings: SettingsState;
+  prompt: string;
+  system: string;
+  temperature: number;
+}) {
+  if (!settings.aiEndpoint?.trim() || !settings.aiApiKey?.trim()) {
+    throw new Error("请先在设置里填写 AI 请求地址和 API Key。");
+  }
+
+  const response = await fetch(normalizeAiEndpoint(settings.aiEndpoint), {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${settings.aiApiKey.trim()}`,
     },
     body: JSON.stringify({
-      model: settings.aiModel?.trim() || "gpt-4o-mini",
-      temperature: 0.4,
+      model: settings.aiModel?.trim() || DEFAULT_AI_MODEL,
+      temperature,
       messages: [
         {
           role: "system",
-          content:
-            "你只提供个人训练记录辅助建议，不替代医疗建议。回答要可执行、克制、手机屏幕友好。",
+          content: system,
         },
         { role: "user", content: prompt },
       ],
@@ -125,6 +310,214 @@ export async function requestAiTrainingRecommendation({
     "";
   if (!String(content).trim()) throw new Error("AI 返回为空，请检查供应商接口格式。");
   return String(content).trim();
+}
+
+function normalizeAiEndpoint(input?: string) {
+  const endpoint = input?.trim().replace(/\/+$/, "") ?? "";
+  if (endpoint.endsWith("/chat/completions")) return endpoint;
+  if (endpoint.endsWith("/v1")) return `${endpoint}/chat/completions`;
+  return `${endpoint}/v1/chat/completions`;
+}
+
+function parseAiRecommendation(
+  content: string,
+  basePlans: PlanDay[],
+): AiTrainingRecommendation {
+  const parsed = extractJson(content);
+  if (!parsed) {
+    return {
+      rawText: content,
+      summary: content,
+      plans: [],
+    };
+  }
+
+  const record = parsed as Record<string, unknown>;
+  const rawDays =
+    asArray(parsed) ??
+    asArray(record.days) ??
+    asArray(record.plans) ??
+    asArray(record.weekPlan) ??
+    [];
+  const plans = basePlans
+    .map((basePlan, index) =>
+      sanitizeAiPlanDay(
+        findAiDay(rawDays, basePlan.date, index),
+        basePlan,
+      ),
+    )
+    .filter(Boolean) as PlanDay[];
+
+  return {
+    rawText: content,
+    summary:
+      stringValue(record.summary) ||
+      stringValue(record.overview) ||
+      stringValue(record.message) ||
+      "AI 已生成一版新的本周训练计划，请先浏览再决定是否覆盖。",
+    plans: plans.length === basePlans.length ? plans : [],
+  };
+}
+
+function extractJson(content: string) {
+  const trimmed = content.trim();
+  if (!trimmed) return undefined;
+
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1]?.trim();
+    if (fenced) {
+      try {
+        return JSON.parse(fenced);
+      } catch {
+        // Continue with loose object extraction below.
+      }
+    }
+  }
+
+  const start = trimmed.indexOf("{");
+  const end = trimmed.lastIndexOf("}");
+  if (start < 0 || end <= start) return undefined;
+  try {
+    return JSON.parse(trimmed.slice(start, end + 1));
+  } catch {
+    return undefined;
+  }
+}
+
+function findAiDay(days: unknown[], date: string, index: number) {
+  const exact = days.find((day) => {
+    const record = asRecord(day);
+    return stringValue(record?.date) === date;
+  });
+  return exact ?? days[index];
+}
+
+function sanitizeAiPlanDay(input: unknown, basePlan: PlanDay): PlanDay | undefined {
+  const record = asRecord(input);
+  if (!record) return undefined;
+  const exercises = normalizeExercises(record.exercises);
+  const kind = normalizeTrainingKind(record.kind) ?? basePlan.kind;
+  const powerRange = normalizePowerRange(
+    record.powerRange ?? record.targetPowerRange ?? record.targetPower,
+  );
+  const durationMinutes = numberValue(
+    record.durationMinutes ?? record.minutes ?? record.duration,
+  );
+
+  return {
+    date: basePlan.date,
+    templateId: undefined,
+    title: stringValue(record.title) || basePlan.title,
+    kind,
+    durationMinutes,
+    durationLabel: stringValue(record.durationLabel),
+    powerRange: kind === "rest" ? undefined : powerRange,
+    rideDetails: stringValue(record.rideDetails ?? record.ride),
+    exercises,
+    strengthDurationLabel: exercises?.length
+      ? stringValue(record.strengthDurationLabel) || "20-25分钟"
+      : undefined,
+    notes: stringValue(record.notes ?? record.reason),
+    nutrition: stringValue(record.nutrition ?? record.diet),
+  };
+}
+
+function normalizeTrainingKind(value: unknown): TrainingKind | undefined {
+  const text = String(value ?? "").toLowerCase().trim();
+  const map: Record<string, TrainingKind> = {
+    recovery: "recovery",
+    z1: "recovery",
+    恢复: "recovery",
+    恢复骑: "recovery",
+    z2: "z2",
+    耐力: "z2",
+    有氧: "aerobic",
+    aerobic: "aerobic",
+    sweetspot: "sweetspot",
+    "sweet-spot": "sweetspot",
+    sweet: "sweetspot",
+    甜区: "sweetspot",
+    threshold: "threshold",
+    阈值: "threshold",
+    rest: "rest",
+    休息: "rest",
+    strength: "strength",
+    力量: "strength",
+  };
+  if (map[text]) return map[text];
+  if (text.includes("sweet") || text.includes("甜区")) return "sweetspot";
+  if (text.includes("threshold") || text.includes("阈值")) return "threshold";
+  if (text.includes("z2") || text.includes("耐力")) return "z2";
+  if (text.includes("recovery") || text.includes("恢复")) return "recovery";
+  if (text.includes("rest") || text.includes("休息")) return "rest";
+  if (text.includes("aerobic") || text.includes("有氧")) return "aerobic";
+  if (text.includes("strength") || text.includes("力量")) return "strength";
+  return undefined;
+}
+
+function normalizePowerRange(value: unknown): [number, number] | undefined {
+  if (Array.isArray(value)) {
+    const numbers = value.map(numberValue).filter(isNumber);
+    if (numbers.length >= 2) return sortRange(numbers[0], numbers[1]);
+  }
+
+  const matches = String(value ?? "").match(/\d+(?:\.\d+)?/g);
+  if (!matches || matches.length < 2) return undefined;
+  return sortRange(Number(matches[0]), Number(matches[1]));
+}
+
+function sortRange(a: number, b: number): [number, number] {
+  const low = Math.round(Math.min(a, b));
+  const high = Math.round(Math.max(a, b));
+  return [low, high];
+}
+
+function normalizeExercises(value: unknown): Exercise[] | undefined {
+  const items = asArray(value);
+  if (!items?.length) return undefined;
+  const exercises = items
+    .map((item) => {
+      const record = asRecord(item);
+      if (!record) return undefined;
+      const name = stringValue(record.name);
+      if (!name) return undefined;
+      return {
+        name,
+        sets: numberValue(record.sets) ?? 3,
+        reps: stringValue(record.reps) || "8-12次",
+      };
+    })
+    .filter(Boolean) as Exercise[];
+  return exercises.length ? exercises : undefined;
+}
+
+function asArray(value: unknown) {
+  return Array.isArray(value) ? value : undefined;
+}
+
+function asRecord(value: unknown) {
+  return value && typeof value === "object"
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function stringValue(value: unknown) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function numberValue(value: unknown) {
+  if (value === undefined || value === null || value === "") return undefined;
+  const number =
+    typeof value === "string"
+      ? Number(value.match(/\d+(?:\.\d+)?/)?.[0])
+      : Number(value);
+  return Number.isFinite(number) ? number : undefined;
+}
+
+function isNumber(value: number | undefined): value is number {
+  return typeof value === "number" && Number.isFinite(value);
 }
 
 function normalizeActivities(payload: unknown): IntervalsActivity[] {
