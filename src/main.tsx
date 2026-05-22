@@ -38,6 +38,7 @@ import {
   DayMemo,
   PlanDay,
   SettingsState,
+  TrainingLog,
   TrainingKind,
   TrainingTemplate,
   createBlankTemplate,
@@ -81,6 +82,7 @@ function App() {
   const [plans, setPlans] = useState<Record<string, PlanDay>>({});
   const [bodyEntries, setBodyEntries] = useState<Record<string, BodyEntry>>({});
   const [checkins, setCheckins] = useState<Record<string, Checkins>>({});
+  const [trainingLogs, setTrainingLogs] = useState<Record<string, TrainingLog>>({});
   const [dayMemos, setDayMemos] = useState<Record<string, DayMemo>>({});
   const [trainingTemplates, setTrainingTemplates] = useState<
     TrainingTemplate[]
@@ -93,6 +95,7 @@ function App() {
       setPlans(data.plans);
       setBodyEntries(data.bodyEntries);
       setCheckins(data.checkins);
+      setTrainingLogs(data.trainingLogs);
       setDayMemos(data.dayMemos);
       setTrainingTemplates(data.trainingTemplates);
       setReady(true);
@@ -106,6 +109,7 @@ function App() {
       plans,
       bodyEntries,
       checkins,
+      trainingLogs,
       dayMemos,
       trainingTemplates,
     });
@@ -115,6 +119,7 @@ function App() {
     plans,
     bodyEntries,
     checkins,
+    trainingLogs,
     dayMemos,
     trainingTemplates,
   ]);
@@ -155,6 +160,19 @@ function App() {
     }));
   };
 
+  const updateTrainingLog = (date: string, patch: Partial<TrainingLog>) => {
+    setTrainingLogs((current) => ({
+      ...current,
+      [date]: { ...current[date], ...patch, date },
+    }));
+  };
+
+  const handleExport = async (label?: string) => {
+    const exportedAt = new Date().toISOString();
+    downloadJson(await exportData(), label);
+    setSettings((current) => ({ ...current, lastBackupAt: exportedAt }));
+  };
+
   const nav = [
     ["today", Home, "今日"],
     ["plan", CalendarDays, "计划"],
@@ -181,6 +199,12 @@ function App() {
               plan={todayPlan}
               memo={dayMemos[today]}
               checkins={todayCheckins}
+              plans={plans}
+              bodyEntries={bodyEntries}
+              allCheckins={checkins}
+              trainingLogs={trainingLogs}
+              settings={settings}
+              templates={trainingTemplates}
               onCheck={(key, value) => updateCheckin(today, key, value)}
             />
           )}
@@ -197,6 +221,8 @@ function App() {
               onTrainingDone={(date, value) =>
                 updateCheckin(date, "trainingDone", value)
               }
+              trainingLogs={trainingLogs}
+              onTrainingLogChange={updateTrainingLog}
             />
           )}
           {tab === "calendar" && (
@@ -216,6 +242,7 @@ function App() {
           )}
           {tab === "body" && (
             <BodyPage
+              settings={settings}
               entries={bodyEntries}
               onSave={(entry) =>
                 setBodyEntries((current) => ({
@@ -231,21 +258,23 @@ function App() {
               templates={trainingTemplates}
               onSettings={setSettings}
               onTemplates={setTrainingTemplates}
-              onExport={async () => downloadJson(await exportData())}
-              onImport={(file) =>
-                importJson(file).then((payload) => {
+              onExport={() => handleExport()}
+              onImport={async (file) => {
+                await handleExport("before-import");
+                return importJson(file).then((payload) => {
                   const data = payload.data ?? payload;
                   setSettings(data.settings ?? DEFAULT_SETTINGS);
                   setPlans(data.plans ?? {});
                   setBodyEntries(data.bodyEntries ?? {});
                   setCheckins(data.checkins ?? {});
+                  setTrainingLogs(data.trainingLogs ?? {});
                   setDayMemos(data.dayMemos ?? {});
                   setTrainingTemplates(
                     data.trainingTemplates ?? defaultTrainingTemplates,
                   );
                   return importData(payload);
-                })
-              }
+                });
+              }}
               onClear={async () => {
                 if (
                   !window.confirm(
@@ -264,6 +293,7 @@ function App() {
                 setPlans({});
                 setBodyEntries({});
                 setCheckins({});
+                setTrainingLogs({});
                 setDayMemos({});
                 setTrainingTemplates(defaultTrainingTemplates);
               }}
@@ -293,11 +323,23 @@ function TodayPage({
   plan,
   memo,
   checkins,
+  plans,
+  bodyEntries,
+  allCheckins,
+  trainingLogs,
+  settings,
+  templates,
   onCheck,
 }: {
   plan: PlanDay;
   memo?: DayMemo;
   checkins: Checkins;
+  plans: Record<string, PlanDay>;
+  bodyEntries: Record<string, BodyEntry>;
+  allCheckins: Record<string, Checkins>;
+  trainingLogs: Record<string, TrainingLog>;
+  settings: SettingsState;
+  templates: TrainingTemplate[];
   onCheck: (key: keyof Checkins, value: boolean) => void;
 }) {
   return (
@@ -333,6 +375,15 @@ function TodayPage({
 
       <NutritionPanel plan={plan} />
 
+      <WeeklyReview
+        plans={plans}
+        bodyEntries={bodyEntries}
+        checkins={allCheckins}
+        trainingLogs={trainingLogs}
+        settings={settings}
+        templates={templates}
+      />
+
       {memo?.text.trim() && (
         <div className="panel memo-panel">
           <h3>今日备忘</h3>
@@ -344,6 +395,79 @@ function TodayPage({
         <CheckGrid checkins={checkins} onCheck={onCheck} compact />
       </div>
     </section>
+  );
+}
+
+function WeeklyReview({
+  plans,
+  bodyEntries,
+  checkins,
+  trainingLogs,
+  settings,
+  templates,
+}: {
+  plans: Record<string, PlanDay>;
+  bodyEntries: Record<string, BodyEntry>;
+  checkins: Record<string, Checkins>;
+  trainingLogs: Record<string, TrainingLog>;
+  settings: SettingsState;
+  templates: TrainingTemplate[];
+}) {
+  const week = getWeekDays(new Date());
+  const weekKeys = week.map(dateKey);
+  const planned = weekKeys.map((key) =>
+    withCurrentPower(
+      plans[key] ?? defaultPlanForDate(key, settings.ftp, templates),
+      settings.ftp,
+      templates,
+    ),
+  );
+  const trainingDays = planned.filter((plan) => plan.kind !== "rest").length;
+  const done = weekKeys.filter((key) => checkins[key]?.trainingDone).length;
+  const strength = planned.filter((plan, index) => {
+    const key = weekKeys[index];
+    return plan.kind === "strength" && checkins[key]?.trainingDone;
+  }).length;
+  const actualMinutes = weekKeys.reduce(
+    (sum, key) => sum + numeric(trainingLogs[key]?.actualMinutes),
+    0,
+  );
+  const rpeValues = weekKeys
+    .map((key) => numeric(trainingLogs[key]?.rpe))
+    .filter((value) => value > 0);
+  const averageRpe = rpeValues.length
+    ? (rpeValues.reduce((sum, value) => sum + value, 0) / rpeValues.length).toFixed(1)
+    : "-";
+  const habits = weekKeys.flatMap((key) => {
+    const item = checkins[key] ?? {};
+    return [item.proteinDone, item.dinnerControlled, item.earlySleep];
+  });
+  const habitRate = habits.length
+    ? Math.round((habits.filter(Boolean).length / habits.length) * 100)
+    : 0;
+  const weightTrend = buildWeightTrendText(bodyEntries);
+
+  return (
+    <div className="panel weekly-review">
+      <div className="section-head">
+        <h3>本周回顾</h3>
+        <span>{formatMonthDay(week[0])} - {formatMonthDay(week[6])}</span>
+      </div>
+      <div className="review-grid">
+        <Metric label="训练完成" value={`${done}/${trainingDays}`} />
+        <Metric label="实际时长" value={actualMinutes ? `${actualMinutes} 分钟` : "-"} />
+        <Metric label="力量次数" value={`${strength} 次`} />
+        <Metric label="平均 RPE" value={averageRpe} />
+      </div>
+      <div className="review-line">
+        <span>体重 7 日均值</span>
+        <strong>{weightTrend}</strong>
+      </div>
+      <div className="review-line">
+        <span>蛋白 / 晚餐 / 早睡</span>
+        <strong>{habitRate}%</strong>
+      </div>
+    </div>
   );
 }
 
@@ -513,22 +637,26 @@ function PlanPage({
   settings,
   plans,
   checkins,
+  trainingLogs,
   templates,
   weekStart,
   onWeekChange,
   onPlanChange,
   onTemplate,
   onTrainingDone,
+  onTrainingLogChange,
 }: {
   settings: SettingsState;
   plans: Record<string, PlanDay>;
   checkins: Record<string, Checkins>;
+  trainingLogs: Record<string, TrainingLog>;
   templates: TrainingTemplate[];
   weekStart: Date;
   onWeekChange: (date: Date) => void;
   onPlanChange: (date: string, patch: Partial<PlanDay>) => void;
   onTemplate: (date: string, id: string) => void;
   onTrainingDone: (date: string, value: boolean) => void;
+  onTrainingLogChange: (date: string, patch: Partial<TrainingLog>) => void;
 }) {
   const week = getWeekDays(weekStart);
   const completedCount = week.filter(
@@ -604,6 +732,7 @@ function PlanPage({
           settings.ftp,
           templates,
         );
+        const log = trainingLogs[key] ?? { date: key };
         return (
           <article
             className="panel plan-editor"
@@ -692,6 +821,10 @@ function PlanPage({
             {plan.nutrition && (
               <p className="nutrition-note">{plan.nutrition}</p>
             )}
+            <TrainingLogEditor
+              log={log}
+              onChange={(patch) => onTrainingLogChange(key, patch)}
+            />
           </article>
         );
       })}
@@ -699,10 +832,88 @@ function PlanPage({
   );
 }
 
+function TrainingLogEditor({
+  log,
+  onChange,
+}: {
+  log: TrainingLog;
+  onChange: (patch: Partial<TrainingLog>) => void;
+}) {
+  return (
+    <div className="actual-log">
+      <h4>实际完成记录</h4>
+      <div className="form-grid">
+        <label>
+          实际时长
+          <Input
+            type="number"
+            value={log.actualMinutes ?? ""}
+            placeholder="分钟"
+            onChange={(value) => onChange({ actualMinutes: String(value) })}
+          />
+        </label>
+        <label>
+          平均功率
+          <Input
+            type="number"
+            value={log.averagePower ?? ""}
+            placeholder="W，可选"
+            onChange={(value) => onChange({ averagePower: String(value) })}
+          />
+        </label>
+        <label>
+          RPE
+          <select
+            value={log.rpe ?? ""}
+            onChange={(event) => onChange({ rpe: event.target.value })}
+          >
+            <option value="">未记录</option>
+            {Array.from({ length: 10 }, (_, index) => String(index + 1)).map(
+              (value) => (
+                <option key={value} value={value}>
+                  {value}
+                </option>
+              ),
+            )}
+          </select>
+        </label>
+        <label>
+          体感
+          <select
+            value={log.feeling ?? ""}
+            onChange={(event) =>
+              onChange({
+                feeling: (event.target.value || undefined) as TrainingLog["feeling"],
+              })
+            }
+          >
+            <option value="">未记录</option>
+            <option value="easy">轻松</option>
+            <option value="normal">正常</option>
+            <option value="tired">累</option>
+            <option value="very-tired">很累</option>
+          </select>
+        </label>
+      </div>
+      <label>
+        训练备注
+        <Textarea
+          value={log.notes ?? ""}
+          placeholder="比如：腿有点沉、功率稳定、需要调低明天强度..."
+          autosize={{ minRows: 2, maxRows: 4 }}
+          onChange={(value) => onChange({ notes: String(value) })}
+        />
+      </label>
+    </div>
+  );
+}
+
 function BodyPage({
+  settings,
   entries,
   onSave,
 }: {
+  settings: SettingsState;
   entries: Record<string, BodyEntry>;
   onSave: (entry: BodyEntry) => void;
 }) {
@@ -766,6 +977,7 @@ function BodyPage({
             />
           </label>
         </div>
+        <BmiPanel weightKg={entry.weightKg} heightCm={settings.heightCm} />
         <label>
           备注
           <Textarea
@@ -942,16 +1154,29 @@ function SettingsPage({
     <section className="stack">
       <div className="panel">
         <h2>设置</h2>
-        <label>
-          FTP（瓦）
-          <Input
-            type="number"
-            value={settings.ftp}
-            onChange={(value) =>
-              onSettings({ ...settings, ftp: Number(value) })
-            }
-          />
-        </label>
+        <div className="form-grid">
+          <label>
+            FTP（瓦）
+            <Input
+              type="number"
+              value={settings.ftp}
+              onChange={(value) =>
+                onSettings({ ...settings, ftp: Number(value) })
+              }
+            />
+          </label>
+          <label>
+            身高 cm
+            <Input
+              type="number"
+              value={settings.heightCm ?? ""}
+              placeholder="例如 175"
+              onChange={(value) =>
+                onSettings({ ...settings, heightCm: String(value) })
+              }
+            />
+          </label>
+        </div>
         <div className="zones">
           <PowerZone
             name="Z1恢复"
@@ -1136,6 +1361,7 @@ function SettingsPage({
 
       <div className="panel">
         <h2>数据管理</h2>
+        <BackupStatus lastBackupAt={settings.lastBackupAt} />
         <div className="action-list">
           <Button
             block
@@ -1173,6 +1399,139 @@ function SettingsPage({
   );
 }
 
+function BmiPanel({
+  weightKg,
+  heightCm,
+}: {
+  weightKg?: string;
+  heightCm?: string;
+}) {
+  const bmi = calculateBmi(weightKg, heightCm);
+  const info = bmi ? getBmiInfo(bmi) : undefined;
+
+  return (
+    <div className={`bmi-panel ${info?.level ?? ""}`}>
+      <div>
+        <span>BMI</span>
+        <strong>{bmi ? bmi.toFixed(1) : "待计算"}</strong>
+      </div>
+      <p>
+        {bmi
+          ? `${info?.label}：${info?.hint}`
+          : "在设置里录入身高，并在当天记录体重后自动计算。"}
+      </p>
+      <div className="bmi-ranges" aria-label="BMI 区间">
+        {BMI_RANGES.map((range) => (
+          <span
+            key={range.level}
+            className={info?.level === range.level ? "active" : ""}
+          >
+            {range.label}
+            <em>{range.text}</em>
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function BackupStatus({ lastBackupAt }: { lastBackupAt?: string }) {
+  const lastBackupDate = lastBackupAt ? new Date(lastBackupAt) : null;
+  const daysSince = lastBackupDate
+    ? Math.floor((Date.now() - lastBackupDate.getTime()) / 86400000)
+    : undefined;
+  const needsBackup = daysSince === undefined || daysSince >= 7;
+
+  return (
+    <div className={`backup-status ${needsBackup ? "warn" : ""}`}>
+      <span>{needsBackup ? "建议备份" : "备份状态"}</span>
+      <strong>
+        {lastBackupDate
+          ? `上次备份：${new Intl.DateTimeFormat("zh-CN", {
+              month: "long",
+              day: "numeric",
+              hour: "2-digit",
+              minute: "2-digit",
+            }).format(lastBackupDate)}`
+          : "还没有导出过备份"}
+      </strong>
+      <p>
+        {needsBackup
+          ? "长期记录建议每周手动导出一次 JSON。导入恢复前会自动先导出当前数据。"
+          : "当前本地数据已在最近一周内备份过。"}
+      </p>
+    </div>
+  );
+}
+
+function numeric(value?: string | number) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function buildWeightTrendText(entries: Record<string, BodyEntry>) {
+  const points = Object.values(entries)
+    .map((entry) => ({ date: entry.date, weight: numeric(entry.weightKg) }))
+    .filter((entry) => entry.weight > 0)
+    .sort((a, b) => a.date.localeCompare(b.date));
+
+  if (points.length < 2) return "数据不足";
+
+  const recent = points.slice(-7);
+  const previous = points.slice(-14, -7);
+  const recentAvg =
+    recent.reduce((sum, entry) => sum + entry.weight, 0) / recent.length;
+
+  if (previous.length === 0) return `${recentAvg.toFixed(1)} kg`;
+
+  const previousAvg =
+    previous.reduce((sum, entry) => sum + entry.weight, 0) / previous.length;
+  const diff = recentAvg - previousAvg;
+  if (Math.abs(diff) < 0.05) return `${recentAvg.toFixed(1)} kg，持平`;
+  return `${recentAvg.toFixed(1)} kg，${diff > 0 ? "上升" : "下降"} ${Math.abs(diff).toFixed(1)} kg`;
+}
+
+const BMI_RANGES = [
+  {
+    level: "underweight",
+    label: "偏瘦",
+    text: "<18.5",
+    hint: "优先保证恢复和蛋白质，不建议继续激进减脂。",
+  },
+  {
+    level: "normal",
+    label: "正常",
+    text: "18.5-23.9",
+    hint: "继续看体重均值、腰围和训练表现的长期趋势。",
+  },
+  {
+    level: "overweight",
+    label: "超重",
+    text: "24-27.9",
+    hint: "适合稳步减脂，别把训练日前后的碳水砍太狠。",
+  },
+  {
+    level: "obese",
+    label: "肥胖",
+    text: ">=28",
+    hint: "这是需要重点关注的区间，建议以腰围和周均体重一起跟踪。",
+  },
+] as const;
+
+function calculateBmi(weightKg?: string, heightCm?: string) {
+  const weight = numeric(weightKg);
+  const height = numeric(heightCm) / 100;
+  if (!weight || !height) return undefined;
+  return weight / (height * height);
+}
+
+function getBmiInfo(bmi: number) {
+  if (bmi < 18.5) return BMI_RANGES[0];
+  if (bmi < 24) return BMI_RANGES[1];
+  if (bmi < 28) return BMI_RANGES[2];
+  return BMI_RANGES[3];
+}
+
 function PowerZone({
   name,
   range,
@@ -1194,14 +1553,14 @@ function PowerZone({
   );
 }
 
-function downloadJson(data: unknown) {
+function downloadJson(data: unknown, label?: string) {
   const blob = new Blob([JSON.stringify(data, null, 2)], {
     type: "application/json",
   });
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
-  link.download = `bike-training-backup-${todayKey()}.json`;
+  link.download = `bike-training-backup${label ? `-${label}` : ""}-${todayKey()}.json`;
   link.click();
   URL.revokeObjectURL(url);
 }
