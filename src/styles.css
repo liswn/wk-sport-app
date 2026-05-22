@@ -426,6 +426,7 @@ h3 {
 }
 
 .calendar-day {
+  position: relative;
   display: grid;
   min-height: 82px;
   align-content: space-between;
@@ -448,19 +449,25 @@ h3 {
   background: #f0f8f2;
 }
 
+.calendar-day.done::after {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: #2f7a4e;
+  content: "";
+}
+
 .calendar-day-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 4px;
+  display: grid;
+  place-items: center;
+  min-width: 0;
 }
 
 .calendar-day-head strong {
   font-size: 15px;
-}
-
-.calendar-day-head svg {
-  color: #2f7a4e;
 }
 
 .calendar-kind {
@@ -469,17 +476,19 @@ h3 {
   color: #5f6a66;
   font-size: 10px;
   font-weight: 750;
+  text-align: center;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .calendar-dots {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 3px;
+  display: flex;
+  justify-content: center;
+  gap: 4px;
 }
 
 .calendar-dots i {
+  width: 5px;
   height: 5px;
   border-radius: 999px;
   background: #dfe4dc;

@@ -2,33 +2,17 @@ import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   Button,
-  Cell,
-  CellGroup,
   Input,
-  Switch,
   TabBar,
   TabBarItem,
-  Tag,
   Textarea
 } from "tdesign-mobile-react";
 import "tdesign-mobile-react/es/style/index.css";
-import {
-  Area,
-  Brush,
-  CartesianGrid,
-  ComposedChart,
-  Line,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis
-} from "recharts";
 import {
   CalendarCheck,
   CalendarDays,
   Check,
   Download,
-  Dumbbell,
   Home,
   Plus,
   RotateCcw,
@@ -38,6 +22,9 @@ import {
   Weight
 } from "lucide-react";
 import "./styles.css";
+import { CheckGrid, KindTag, Metric, StrengthList } from "./components/TrainingBits";
+import { TrendChart } from "./components/TrendChart";
+import { addMonths, getCalendarDays } from "./calendarUtils";
 import { registerSW } from "virtual:pwa-register";
 import {
   BodyEntry,
@@ -50,11 +37,19 @@ import {
   createBlankTemplate,
   defaultPlanForDate,
   defaultTrainingTemplates,
-  getTemplate,
-  materializeTemplate
+  getTemplate
 } from "./model";
 import { clearAllData, exportData, importData, loadAppData, saveAppData } from "./storage";
 import { addDays, dateKey, formatChineseDate, formatMonthDay, getWeekDays, todayKey } from "./time";
+import {
+  buildNutritionTips,
+  formatExercises,
+  formatRangePercent,
+  labelKind,
+  parseExercises,
+  parseRangePercent,
+  withCurrentPower
+} from "./trainingUtils";
 
 registerSW({ immediate: true });
 
@@ -347,7 +342,6 @@ function CalendarPage({
               >
                 <div className="calendar-day-head">
                   <strong>{day.getDate()}</strong>
-                  {dayCheckins.trainingDone && <Check size={14} />}
                 </div>
                 <span className={`calendar-kind kind-${plan.kind}`}>{labelKind(plan.kind)}</span>
                 <div className="calendar-dots" aria-label={`完成 ${score}/4`}>
@@ -791,372 +785,6 @@ function SettingsPage({
   );
 }
 
-function Metric({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="metric">
-      <span>{label}</span>
-      <strong>{value}</strong>
-    </div>
-  );
-}
-
-function StrengthList({ plan }: { plan: PlanDay }) {
-  return (
-    <div className="strength-list">
-      {plan.exercises?.map((exercise) => (
-        <div key={`${exercise.name}-${exercise.sets}-${exercise.reps}`}>
-          <Dumbbell size={18} />
-          <span>{exercise.name}</span>
-          <strong>{exercise.sets} x {exercise.reps}</strong>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function CheckGrid({
-  checkins,
-  onCheck,
-  compact = false
-}: {
-  checkins: Checkins;
-  onCheck: (key: keyof Checkins, value: boolean) => void;
-  compact?: boolean;
-}) {
-  const items = [
-    ["trainingDone", "完成训练"],
-    ["proteinDone", "蛋白质够"],
-    ["dinnerControlled", "控制晚餐"],
-    ["earlySleep", "早睡"]
-  ] as const;
-
-  if (compact) {
-    return (
-      <div className="check-quick-row">
-        {items.map(([key, label]) => (
-          <button
-            key={key}
-            type="button"
-            className={checkins[key] ? "active" : ""}
-            onClick={() => onCheck(key, !checkins[key])}
-            aria-pressed={Boolean(checkins[key])}
-          >
-            <span>{checkins[key] ? <Check size={17} /> : null}</span>
-            <em>{label}</em>
-          </button>
-        ))}
-      </div>
-    );
-  }
-
-  return (
-    <CellGroup theme="card" className="check-list">
-      {items.map(([key, label]) => (
-        <Cell
-          key={key}
-          title={label}
-          note={checkins[key] ? "已完成" : "未完成"}
-          rightIcon={
-            <Switch
-              size="small"
-              value={Boolean(checkins[key])}
-              onChange={(value) => onCheck(key, Boolean(value))}
-            />
-          }
-        />
-      ))}
-    </CellGroup>
-  );
-}
-
-function KindTag({ kind }: { kind: TrainingKind }) {
-  const themeMap: Record<TrainingKind, "default" | "primary" | "warning" | "danger" | "success"> = {
-    recovery: "primary",
-    z2: "success",
-    aerobic: "success",
-    sweetspot: "warning",
-    threshold: "danger",
-    rest: "default",
-    strength: "primary"
-  };
-
-  return (
-    <Tag className={`type-chip kind-${kind}`} theme={themeMap[kind]} variant="light" shape="round">
-      {labelKind(kind)}
-    </Tag>
-  );
-}
-
-type TrendDimension = "day" | "week" | "month" | "year";
-type TrendPoint = {
-  key: string;
-  label: string;
-  value: number | null;
-  average?: number | null;
-};
-
-function TrendChart({
-  entries,
-  field,
-  average = false
-}: {
-  entries: BodyEntry[];
-  field: "weightKg" | "waistCm";
-  average?: boolean;
-}) {
-  const [dimension, setDimension] = useState<TrendDimension>("day");
-  const chartData = useMemo(
-    () => buildTrendData(entries, field, dimension),
-    [dimension, entries, field]
-  );
-  const validValues = chartData.flatMap((point) => {
-    const values = typeof point.value === "number" ? [point.value] : [];
-    if (average && typeof point.average === "number") values.push(point.average);
-    return values;
-  });
-
-  if (validValues.length < 2) {
-    return (
-      <div className="chart-card">
-        <TrendDimensionControl value={dimension} onChange={setDimension} />
-        <div className="empty-chart">至少记录 2 个时间点后显示趋势。</div>
-      </div>
-    );
-  }
-
-  const min = Math.min(...validValues);
-  const max = Math.max(...validValues);
-  const pad = Math.max((max - min) * 0.16, 0.8);
-  const unit = field === "weightKg" ? "kg" : "cm";
-  const brushStart = dimension === "day" ? Math.max(0, chartData.length - 7) : 0;
-  const brushEnd = chartData.length - 1;
-
-  return (
-    <div className="chart-card">
-      <TrendDimensionControl value={dimension} onChange={setDimension} />
-      <div className="chart-wrap">
-        <ResponsiveContainer width="100%" height={dimension === "day" ? 250 : 224}>
-          <ComposedChart
-            key={`${field}-${dimension}-${chartData.length}`}
-            data={chartData}
-            margin={{ top: 12, right: 8, bottom: dimension === "day" ? 26 : 0, left: -18 }}
-          >
-            <defs>
-              <linearGradient id={`fill-${field}-${dimension}`} x1="0" y1="0" x2="0" y2="1">
-                <stop offset="8%" stopColor="#2c7a7b" stopOpacity={0.22} />
-                <stop offset="95%" stopColor="#2c7a7b" stopOpacity={0.02} />
-              </linearGradient>
-            </defs>
-            <CartesianGrid stroke="#e5e9e1" strokeDasharray="3 5" vertical={false} />
-            <XAxis
-              dataKey="label"
-              tick={{ fill: "#7c8581", fontSize: 11 }}
-              axisLine={false}
-              tickLine={false}
-              interval="preserveStartEnd"
-            />
-            <YAxis
-              domain={[Math.floor((min - pad) * 10) / 10, Math.ceil((max + pad) * 10) / 10]}
-              tick={{ fill: "#7c8581", fontSize: 11 }}
-              axisLine={false}
-              tickLine={false}
-              width={48}
-            />
-            <Tooltip
-              contentStyle={{
-                border: "1px solid #dfe4dc",
-                borderRadius: 8,
-                boxShadow: "none",
-                fontSize: 12
-              }}
-              labelFormatter={(label) => `${dimensionLabel(dimension)} ${label}`}
-              formatter={(value, name) => [
-                `${Number(value).toFixed(1)}${unit}`,
-                name === "average" ? "7日平均" : field === "weightKg" ? "体重" : "腰围"
-              ]}
-            />
-            <Area
-              type="monotone"
-              dataKey="value"
-              connectNulls
-              stroke="#2c7a7b"
-              strokeWidth={2.6}
-              fill={`url(#fill-${field}-${dimension})`}
-              dot={{ r: 3, strokeWidth: 2, fill: "#ffffff" }}
-              activeDot={{ r: 5 }}
-            />
-            {average && dimension === "day" && (
-              <Line
-                type="monotone"
-                dataKey="average"
-                connectNulls
-                stroke="#d99a2b"
-                strokeWidth={2.4}
-                dot={false}
-                strokeDasharray="5 4"
-              />
-            )}
-            {dimension === "day" && (
-              <Brush
-                dataKey="label"
-                height={24}
-                travellerWidth={10}
-                startIndex={brushStart}
-                endIndex={brushEnd}
-                stroke="#2c7a7b"
-                fill="#f7f7f2"
-              />
-            )}
-          </ComposedChart>
-        </ResponsiveContainer>
-        {average && dimension === "day" && <p className="muted">深色线为每日体重，浅色线为 7 日平均；拖动底部滑块查看其它日期。</p>}
-        {dimension !== "day" && <p className="muted">{dimensionSummary(dimension)}，数值为该时间段内记录的平均值。</p>}
-      </div>
-    </div>
-  );
-}
-
-function TrendDimensionControl({
-  value,
-  onChange
-}: {
-  value: TrendDimension;
-  onChange: (value: TrendDimension) => void;
-}) {
-  const items = [
-    ["day", "天"],
-    ["week", "周"],
-    ["month", "月"],
-    ["year", "年"]
-  ] as const;
-
-  return (
-    <div className="trend-switch">
-      {items.map(([key, label]) => (
-        <button
-          key={key}
-          type="button"
-          className={value === key ? "active" : ""}
-          onClick={() => onChange(key)}
-        >
-          {label}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-function buildTrendData(entries: BodyEntry[], field: "weightKg" | "waistCm", dimension: TrendDimension): TrendPoint[] {
-  if (dimension === "day") return buildDailyTrendData(entries, field);
-  if (dimension === "week") return buildGroupedTrendData(entries, field, getRecentWeeks(10), "week");
-  if (dimension === "month") return buildGroupedTrendData(entries, field, getRecentMonths(12), "month");
-  return buildGroupedTrendData(entries, field, getRecentYears(5), "year");
-}
-
-function buildDailyTrendData(entries: BodyEntry[], field: "weightKg" | "waistCm"): TrendPoint[] {
-  const valueByDate = new Map(
-    entries
-      .map((entry) => [entry.date, Number(entry[field])] as const)
-      .filter(([, value]) => value > 0)
-  );
-  if (valueByDate.size === 0) return [];
-
-  const dates = [...valueByDate.keys()].sort();
-  const start = new Date(`${dates[0]}T00:00:00`);
-  const end = new Date(`${todayKey()}T00:00:00`);
-  const dayCount = Math.max(1, Math.round((end.getTime() - start.getTime()) / 86400000) + 1);
-
-  return Array.from({ length: dayCount }, (_, index) => {
-    const current = addDays(start, index);
-    const key = dateKey(current);
-    const value = valueByDate.get(key);
-    const average = rollingAverage(valueByDate, current, 7);
-    return {
-      key,
-      label: key.slice(5).replace("-", "/"),
-      value: value ?? null,
-      average
-    };
-  });
-}
-
-function buildGroupedTrendData(
-  entries: BodyEntry[],
-  field: "weightKg" | "waistCm",
-  periods: Array<{ key: string; label: string }>,
-  dimension: Exclude<TrendDimension, "day">
-): TrendPoint[] {
-  return periods.map((period) => {
-    const values = entries
-      .filter((entry) => periodKey(entry.date, dimension) === period.key)
-      .map((entry) => Number(entry[field]))
-      .filter((value) => value > 0);
-    return {
-      key: period.key,
-      label: period.label,
-      value: values.length ? Number((values.reduce((sum, value) => sum + value, 0) / values.length).toFixed(2)) : null
-    };
-  });
-}
-
-function rollingAverage(valueByDate: Map<string, number>, date: Date, days: number) {
-  const values = Array.from({ length: days }, (_, index) => {
-    const key = dateKey(addDays(date, -(days - 1 - index)));
-    return valueByDate.get(key);
-  }).filter((value): value is number => typeof value === "number" && value > 0);
-
-  return values.length ? Number((values.reduce((sum, value) => sum + value, 0) / values.length).toFixed(2)) : null;
-}
-
-function getRecentWeeks(count: number) {
-  const currentWeek = getWeekDays(new Date())[0];
-  return Array.from({ length: count }, (_, index) => {
-    const start = addDays(currentWeek, -(count - 1 - index) * 7);
-    return {
-      key: dateKey(start),
-      label: `${start.getMonth() + 1}/${start.getDate()}`
-    };
-  });
-}
-
-function getRecentMonths(count: number) {
-  const now = new Date();
-  return Array.from({ length: count }, (_, index) => {
-    const month = new Date(now.getFullYear(), now.getMonth() - (count - 1 - index), 1);
-    return {
-      key: `${month.getFullYear()}-${String(month.getMonth() + 1).padStart(2, "0")}`,
-      label: `${month.getFullYear().toString().slice(2)}/${month.getMonth() + 1}`
-    };
-  });
-}
-
-function getRecentYears(count: number) {
-  const year = new Date().getFullYear();
-  return Array.from({ length: count }, (_, index) => {
-    const item = String(year - (count - 1 - index));
-    return { key: item, label: item };
-  });
-}
-
-function periodKey(date: string, dimension: Exclude<TrendDimension, "day">) {
-  if (dimension === "year") return date.slice(0, 4);
-  if (dimension === "month") return date.slice(0, 7);
-  return dateKey(getWeekDays(new Date(`${date}T00:00:00`))[0]);
-}
-
-function dimensionLabel(dimension: TrendDimension) {
-  return { day: "日期", week: "周", month: "月份", year: "年份" }[dimension];
-}
-
-function dimensionSummary(dimension: TrendDimension) {
-  return {
-    day: "最近7天",
-    week: "最近10周",
-    month: "最近1年",
-    year: "最近5年"
-  }[dimension];
-}
-
 function PowerZone({
   name,
   range,
@@ -1176,101 +804,6 @@ function PowerZone({
       <strong>{prefix ? `${prefix}${high}W` : `${low}-${high}W`}</strong>
     </div>
   );
-}
-
-function labelKind(kind: TrainingKind) {
-  return {
-    recovery: "恢复",
-    z2: "Z2",
-    aerobic: "有氧",
-    sweetspot: "甜区",
-    threshold: "阈值",
-    rest: "休息",
-    strength: "力量"
-  }[kind];
-}
-
-function withCurrentPower(plan: PlanDay, ftp: number, templates: TrainingTemplate[]) {
-  const template = templates.find((item) => item.id === plan.templateId);
-  if (!template?.rangePercent) return plan;
-  return { ...plan, powerRange: materializeTemplate(template, plan.date, ftp).powerRange };
-}
-
-function buildNutritionTips(plan: PlanDay) {
-  const isHardRide = plan.kind === "sweetspot" || plan.kind === "threshold" || plan.templateId === "saturday-long-z2";
-  const isEasyRide = plan.kind === "recovery" || plan.kind === "z2" || plan.kind === "aerobic";
-  const hasStrength = Boolean(plan.exercises?.length);
-
-  if (plan.kind === "rest" && !hasStrength) {
-    return [
-      { label: "训练前", value: "无需刻意加餐，保持正常饮食。" },
-      { label: "训练后", value: "保证蛋白质，晚餐简单清淡即可。" },
-      { label: "蛋白质", value: "鸡蛋、豆腐、牛肉、虾、猪里脊都可以轮换。" }
-    ];
-  }
-
-  return [
-    {
-      label: "训练前",
-      value: isHardRide
-        ? "补20-40g碳水，例如香蕉、面包或少量米饭。"
-        : isEasyRide
-          ? "可少吃，半根到1根香蕉即可。"
-          : "力量训练前不必吃太多，空腹不舒服就加半根香蕉。"
-    },
-    {
-      label: "训练后",
-      value: "补20-35g蛋白质，加适量主食。"
-    },
-    {
-      label: "晚餐",
-      value: hasStrength
-        ? "优先蛋白质和主食都到位，别把力量日吃得太低。"
-        : "30分钟内解决，蛋白质来源可用牛肉、虾、猪里脊、鸡蛋或豆腐。"
-    }
-  ];
-}
-
-function formatRangePercent(range?: [number, number]) {
-  if (!range) return "";
-  return `${Math.round(range[0] * 100)}-${Math.round(range[1] * 100)}`;
-}
-
-function addMonths(date: Date, months: number) {
-  const next = new Date(date);
-  next.setMonth(next.getMonth() + months);
-  return next;
-}
-
-function getCalendarDays(anchor: Date) {
-  const first = new Date(anchor.getFullYear(), anchor.getMonth(), 1);
-  const startDay = first.getDay() || 7;
-  const start = addDays(first, -(startDay - 1));
-  return Array.from({ length: 42 }, (_, index) => addDays(start, index));
-}
-
-function parseRangePercent(value: string): [number, number] | undefined {
-  const [low, high] = value
-    .split(/[-,，\s]+/)
-    .map((item) => Number(item.trim()))
-    .filter((item) => Number.isFinite(item));
-  if (!low || !high) return undefined;
-  return [low / 100, high / 100];
-}
-
-function formatExercises(exercises?: { name: string; sets: number; reps: string }[]) {
-  return (exercises ?? []).map((item) => `${item.name} | ${item.sets} | ${item.reps}`).join("\n");
-}
-
-function parseExercises(value: string) {
-  return value
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => {
-      const [name = "", sets = "3", reps = "8-10"] = line.split("|").map((item) => item.trim());
-      return { name, sets: Number(sets) || 3, reps };
-    });
 }
 
 function downloadJson(data: unknown) {

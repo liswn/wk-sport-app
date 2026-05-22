@@ -93,6 +93,12 @@ Folder：/
 
 如果以后改用 GitHub Actions 发布，需要在 GitHub Pages 设置里把 Source 改成 `GitHub Actions`。
 
+详细发布步骤见：
+
+```text
+docs/RELEASE.md
+```
+
 ## Gitee Pages
 
 Gitee Pages 服务当前不可用，因此不再作为生产环境。
