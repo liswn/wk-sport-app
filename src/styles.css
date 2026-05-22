@@ -13,7 +13,12 @@
   --td-success-color-5: #3d8b5f;
   --td-warning-color-5: #d99a2b;
   font-family:
-    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    Inter,
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
     sans-serif;
   color: #202425;
   background: #f7f7f2;
@@ -52,7 +57,8 @@ button {
   width: min(760px, 100%);
   min-height: 100vh;
   margin: 0 auto;
-  padding: calc(env(safe-area-inset-top) + 18px) 16px calc(env(safe-area-inset-bottom) + 124px);
+  padding: calc(env(safe-area-inset-top) + 18px) 16px
+    calc(env(safe-area-inset-bottom) + 124px);
 }
 
 .topbar {
@@ -293,7 +299,11 @@ h3 {
   border-radius: 999px;
   padding: 7px;
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.68), rgba(245, 248, 244, 0.46)),
+    linear-gradient(
+      180deg,
+      rgba(255, 255, 255, 0.68),
+      rgba(245, 248, 244, 0.46)
+    ),
     rgba(255, 255, 255, 0.36);
   -webkit-backdrop-filter: saturate(170%) blur(24px);
   backdrop-filter: saturate(170%) blur(24px);
@@ -372,7 +382,7 @@ h3 {
 
 .completion-strip {
   display: grid;
-  grid-template-columns: auto auto minmax(0, 1fr);
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 10px;
   border: 1px solid #e1e4dc;
@@ -384,9 +394,23 @@ h3 {
   font-weight: 650;
 }
 
+.sticky-progress {
+  position: sticky;
+  top: calc(env(safe-area-inset-top) + 8px);
+  z-index: 8;
+  box-shadow: 0 8px 24px rgba(38, 47, 43, 0.08);
+}
+
 .completion-strip strong {
   color: #202425;
   font-size: 16px;
+}
+
+.completion-strip em {
+  color: #66716d;
+  font-size: 13px;
+  font-style: normal;
+  font-weight: 750;
 }
 
 .completion-strip div {
@@ -395,13 +419,32 @@ h3 {
   gap: 5px;
 }
 
-.completion-strip i {
+.completion-strip .month-progress {
   display: block;
   height: 9px;
+  overflow: hidden;
   border-radius: 999px;
   background: #e3e7df;
 }
 
+.completion-strip .month-progress span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: #2f7a4e;
+}
+
+.completion-strip button,
+.completion-strip i {
+  display: block;
+  height: 9px;
+  border: 0;
+  border-radius: 999px;
+  background: #e3e7df;
+  padding: 0;
+}
+
+.completion-strip button.done,
 .completion-strip i.done {
   background: #2f7a4e;
 }
@@ -428,13 +471,14 @@ h3 {
 .calendar-day {
   position: relative;
   display: grid;
-  min-height: 82px;
+  min-height: 52px;
   align-content: space-between;
   gap: 5px;
   border: 1px solid #e0e5dc;
   border-radius: 8px;
   background: #fbfcf8;
-  padding: 7px;
+  padding: 7px 0;
+  color: inherit;
 }
 
 .calendar-day.muted-day {
@@ -443,6 +487,13 @@ h3 {
 
 .calendar-day.today {
   border-color: #2c7a7b;
+}
+
+.calendar-day.selected {
+  border-color: #2c7a7b;
+  background: #edf6f5;
+  border-width: 2px;
+  padding: 6px 0;
 }
 
 .calendar-day.done {
@@ -499,6 +550,33 @@ h3 {
 }
 
 .plan-editor {
+  display: grid;
+  gap: 12px;
+  scroll-margin-top: calc(env(safe-area-inset-top) + 82px);
+}
+
+.plan-date {
+  margin-bottom: 5px;
+  color: #1f2a27;
+  font-size: 18px;
+  font-weight: 800;
+  line-height: 1.2;
+}
+
+.plan-title {
+  color: #66716d;
+  font-size: 15px;
+  font-weight: 650;
+}
+
+.memo-panel p {
+  color: #3f4946;
+  font-size: 14px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
+.memo-editor {
   display: grid;
   gap: 12px;
 }

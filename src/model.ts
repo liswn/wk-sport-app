@@ -50,6 +50,11 @@ export type Checkins = {
   earlySleep?: boolean;
 };
 
+export type DayMemo = {
+  date: string;
+  text: string;
+};
+
 export type SettingsState = {
   ftp: number;
 };
@@ -59,6 +64,7 @@ export type AppData = {
   plans: Record<string, PlanDay>;
   bodyEntries: Record<string, BodyEntry>;
   checkins: Record<string, Checkins>;
+  dayMemos: Record<string, DayMemo>;
   trainingTemplates: TrainingTemplate[];
 };
 

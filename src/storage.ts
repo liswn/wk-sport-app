@@ -64,6 +64,7 @@ function normalizeData(data?: Partial<AppData>): AppData {
     plans: data?.plans ?? {},
     bodyEntries: data?.bodyEntries ?? {},
     checkins: data?.checkins ?? {},
+    dayMemos: data?.dayMemos ?? {},
     trainingTemplates: mergeTrainingTemplates(data?.trainingTemplates)
   };
 }

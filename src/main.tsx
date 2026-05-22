@@ -1,11 +1,11 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   Button,
   Input,
   TabBar,
   TabBarItem,
-  Textarea
+  Textarea,
 } from "tdesign-mobile-react";
 import "tdesign-mobile-react/es/style/index.css";
 import {
@@ -19,10 +19,15 @@ import {
   Settings,
   Trash2,
   Upload,
-  Weight
+  Weight,
 } from "lucide-react";
 import "./styles.css";
-import { CheckGrid, KindTag, Metric, StrengthList } from "./components/TrainingBits";
+import {
+  CheckGrid,
+  KindTag,
+  Metric,
+  StrengthList,
+} from "./components/TrainingBits";
 import { TrendChart } from "./components/TrendChart";
 import { addMonths, getCalendarDays } from "./calendarUtils";
 import { registerSW } from "virtual:pwa-register";
@@ -30,6 +35,7 @@ import {
   BodyEntry,
   Checkins,
   DEFAULT_SETTINGS,
+  DayMemo,
   PlanDay,
   SettingsState,
   TrainingKind,
@@ -37,10 +43,23 @@ import {
   createBlankTemplate,
   defaultPlanForDate,
   defaultTrainingTemplates,
-  getTemplate
+  getTemplate,
 } from "./model";
-import { clearAllData, exportData, importData, loadAppData, saveAppData } from "./storage";
-import { addDays, dateKey, formatChineseDate, formatMonthDay, getWeekDays, todayKey } from "./time";
+import {
+  clearAllData,
+  exportData,
+  importData,
+  loadAppData,
+  saveAppData,
+} from "./storage";
+import {
+  addDays,
+  dateKey,
+  formatChineseDate,
+  formatMonthDay,
+  getWeekDays,
+  todayKey,
+} from "./time";
 import {
   buildNutritionTips,
   formatExercises,
@@ -48,7 +67,7 @@ import {
   labelKind,
   parseExercises,
   parseRangePercent,
-  withCurrentPower
+  withCurrentPower,
 } from "./trainingUtils";
 
 registerSW({ immediate: true });
@@ -62,7 +81,10 @@ function App() {
   const [plans, setPlans] = useState<Record<string, PlanDay>>({});
   const [bodyEntries, setBodyEntries] = useState<Record<string, BodyEntry>>({});
   const [checkins, setCheckins] = useState<Record<string, Checkins>>({});
-  const [trainingTemplates, setTrainingTemplates] = useState<TrainingTemplate[]>(defaultTrainingTemplates);
+  const [dayMemos, setDayMemos] = useState<Record<string, DayMemo>>({});
+  const [trainingTemplates, setTrainingTemplates] = useState<
+    TrainingTemplate[]
+  >(defaultTrainingTemplates);
   const [weekStart, setWeekStart] = useState(() => getWeekDays(new Date())[0]);
 
   useEffect(() => {
@@ -71,6 +93,7 @@ function App() {
       setPlans(data.plans);
       setBodyEntries(data.bodyEntries);
       setCheckins(data.checkins);
+      setDayMemos(data.dayMemos);
       setTrainingTemplates(data.trainingTemplates);
       setReady(true);
     });
@@ -78,21 +101,45 @@ function App() {
 
   useEffect(() => {
     if (!ready) return;
-    saveAppData({ settings, plans, bodyEntries, checkins, trainingTemplates });
-  }, [ready, settings, plans, bodyEntries, checkins, trainingTemplates]);
+    saveAppData({
+      settings,
+      plans,
+      bodyEntries,
+      checkins,
+      dayMemos,
+      trainingTemplates,
+    });
+  }, [
+    ready,
+    settings,
+    plans,
+    bodyEntries,
+    checkins,
+    dayMemos,
+    trainingTemplates,
+  ]);
 
   const today = todayKey();
   const todayPlan = withCurrentPower(
     plans[today] ?? defaultPlanForDate(today, settings.ftp, trainingTemplates),
     settings.ftp,
-    trainingTemplates
+    trainingTemplates,
   );
   const todayCheckins = checkins[today] ?? {};
 
   const updatePlan = (date: string, patch: Partial<PlanDay>) => {
     setPlans((current) => {
-      const base = current[date] ?? defaultPlanForDate(date, settings.ftp, trainingTemplates);
-      return { ...current, [date]: withCurrentPower({ ...base, ...patch }, settings.ftp, trainingTemplates) };
+      const base =
+        current[date] ??
+        defaultPlanForDate(date, settings.ftp, trainingTemplates);
+      return {
+        ...current,
+        [date]: withCurrentPower(
+          { ...base, ...patch },
+          settings.ftp,
+          trainingTemplates,
+        ),
+      };
     });
   };
 
@@ -102,7 +149,10 @@ function App() {
   };
 
   const updateCheckin = (date: string, key: keyof Checkins, value: boolean) => {
-    setCheckins((current) => ({ ...current, [date]: { ...current[date], [key]: value } }));
+    setCheckins((current) => ({
+      ...current,
+      [date]: { ...current[date], [key]: value },
+    }));
   };
 
   const nav = [
@@ -110,14 +160,13 @@ function App() {
     ["plan", CalendarDays, "计划"],
     ["calendar", CalendarCheck, "日历"],
     ["body", Weight, "身体"],
-    ["settings", Settings, "设置"]
+    ["settings", Settings, "设置"],
   ] as const;
 
   return (
     <main className="app-shell">
       <header className="topbar">
         <div>
-          <p className="eyebrow">本地优先 · 离线可用</p>
           <h1>骑行训练</h1>
         </div>
         <div className="ftp-pill">FTP {settings.ftp}W</div>
@@ -130,6 +179,7 @@ function App() {
           {tab === "today" && (
             <TodayPage
               plan={todayPlan}
+              memo={dayMemos[today]}
               checkins={todayCheckins}
               onCheck={(key, value) => updateCheckin(today, key, value)}
             />
@@ -144,7 +194,9 @@ function App() {
               onWeekChange={setWeekStart}
               onPlanChange={updatePlan}
               onTemplate={applyTemplate}
-              onTrainingDone={(date, value) => updateCheckin(date, "trainingDone", value)}
+              onTrainingDone={(date, value) =>
+                updateCheckin(date, "trainingDone", value)
+              }
             />
           )}
           {tab === "calendar" && (
@@ -152,13 +204,25 @@ function App() {
               settings={settings}
               plans={plans}
               checkins={checkins}
+              dayMemos={dayMemos}
               templates={trainingTemplates}
+              onMemoChange={(date, text) =>
+                setDayMemos((current) => ({
+                  ...current,
+                  [date]: { date, text },
+                }))
+              }
             />
           )}
           {tab === "body" && (
             <BodyPage
               entries={bodyEntries}
-              onSave={(entry) => setBodyEntries((current) => ({ ...current, [entry.date]: entry }))}
+              onSave={(entry) =>
+                setBodyEntries((current) => ({
+                  ...current,
+                  [entry.date]: entry,
+                }))
+              }
             />
           )}
           {tab === "settings" && (
@@ -175,18 +239,32 @@ function App() {
                   setPlans(data.plans ?? {});
                   setBodyEntries(data.bodyEntries ?? {});
                   setCheckins(data.checkins ?? {});
-                  setTrainingTemplates(data.trainingTemplates ?? defaultTrainingTemplates);
+                  setDayMemos(data.dayMemos ?? {});
+                  setTrainingTemplates(
+                    data.trainingTemplates ?? defaultTrainingTemplates,
+                  );
                   return importData(payload);
                 })
               }
               onClear={async () => {
-                if (!window.confirm("确定清空所有本地训练、身体和设置数据？此操作不能撤销。")) return;
-                if (!window.confirm("再次确认：清空后只能通过之前导出的 JSON 恢复。")) return;
+                if (
+                  !window.confirm(
+                    "确定清空所有本地训练、身体和设置数据？此操作不能撤销。",
+                  )
+                )
+                  return;
+                if (
+                  !window.confirm(
+                    "再次确认：清空后只能通过之前导出的 JSON 恢复。",
+                  )
+                )
+                  return;
                 await clearAllData();
                 setSettings(DEFAULT_SETTINGS);
                 setPlans({});
                 setBodyEntries({});
                 setCheckins({});
+                setDayMemos({});
                 setTrainingTemplates(defaultTrainingTemplates);
               }}
             />
@@ -202,11 +280,7 @@ function App() {
         onChange={(value) => setTab(value as Tab)}
       >
         {nav.map(([id, Icon, label]) => (
-          <TabBarItem
-            key={id}
-            value={id}
-            icon={<Icon size={20} />}
-          >
+          <TabBarItem key={id} value={id} icon={<Icon size={20} />}>
             {label}
           </TabBarItem>
         ))}
@@ -217,10 +291,12 @@ function App() {
 
 function TodayPage({
   plan,
+  memo,
   checkins,
-  onCheck
+  onCheck,
 }: {
   plan: PlanDay;
+  memo?: DayMemo;
   checkins: Checkins;
   onCheck: (key: keyof Checkins, value: boolean) => void;
 }) {
@@ -236,8 +312,18 @@ function TodayPage({
           <p className="muted">今天安排休息。恢复也是训练的一部分。</p>
         ) : plan.powerRange || plan.durationMinutes || plan.rideDetails ? (
           <div className="ride-metrics">
-            <Metric label="时长" value={plan.durationLabel ?? `${plan.durationMinutes ?? 0} 分钟`} />
-            <Metric label="功率" value={plan.powerRange ? `${plan.powerRange[0]}-${plan.powerRange[1]}W` : "按体感"} />
+            <Metric
+              label="时长"
+              value={plan.durationLabel ?? `${plan.durationMinutes ?? 0} 分钟`}
+            />
+            <Metric
+              label="功率"
+              value={
+                plan.powerRange
+                  ? `${plan.powerRange[0]}-${plan.powerRange[1]}W`
+                  : "按体感"
+              }
+            />
           </div>
         ) : null}
         {plan.rideDetails && <p className="note">{plan.rideDetails}</p>}
@@ -246,6 +332,13 @@ function TodayPage({
       </div>
 
       <NutritionPanel plan={plan} />
+
+      {memo?.text.trim() && (
+        <div className="panel memo-panel">
+          <h3>今日备忘</h3>
+          <p>{memo.text}</p>
+        </div>
+      )}
 
       <div className="floating-checkin" aria-label="今日执行">
         <CheckGrid checkins={checkins} onCheck={onCheck} compact />
@@ -268,7 +361,9 @@ function NutritionPanel({ plan }: { plan: PlanDay }) {
           </div>
         ))}
       </div>
-      <p className="nutrition-note">减脂期不要把训练日前后的碳水砍太狠；晚餐尽量简单，30分钟内完成。</p>
+      <p className="nutrition-note">
+        减脂期不要把训练日前后的碳水砍太狠；晚餐尽量简单，30分钟内完成。
+      </p>
     </div>
   );
 }
@@ -277,35 +372,65 @@ function CalendarPage({
   settings,
   plans,
   checkins,
-  templates
+  dayMemos,
+  templates,
+  onMemoChange,
 }: {
   settings: SettingsState;
   plans: Record<string, PlanDay>;
   checkins: Record<string, Checkins>;
+  dayMemos: Record<string, DayMemo>;
   templates: TrainingTemplate[];
+  onMemoChange: (date: string, text: string) => void;
 }) {
   const [monthAnchor, setMonthAnchor] = useState(() => new Date());
+  const [selectedDate, setSelectedDate] = useState(todayKey());
   const days = getCalendarDays(monthAnchor);
-  const monthLabel = new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "long" }).format(monthAnchor);
+  const monthLabel = new Intl.DateTimeFormat("zh-CN", {
+    year: "numeric",
+    month: "long",
+  }).format(monthAnchor);
   const monthKey = `${monthAnchor.getFullYear()}-${String(monthAnchor.getMonth() + 1).padStart(2, "0")}`;
   const monthDays = days.filter((day) => dateKey(day).startsWith(monthKey));
-  const completed = monthDays.filter((day) => checkins[dateKey(day)]?.trainingDone).length;
+  const completed = monthDays.filter(
+    (day) => checkins[dateKey(day)]?.trainingDone,
+  ).length;
+  const completionRate = monthDays.length
+    ? Math.round((completed / monthDays.length) * 100)
+    : 0;
+  const selectedPlan = withCurrentPower(
+    plans[selectedDate] ??
+      defaultPlanForDate(selectedDate, settings.ftp, templates),
+    settings.ftp,
+    templates,
+  );
 
   return (
     <section className="stack">
       <div className="week-switch">
-        <button type="button" onClick={() => setMonthAnchor(addMonths(monthAnchor, -1))}>上个月</button>
+        <button
+          type="button"
+          onClick={() => setMonthAnchor(addMonths(monthAnchor, -1))}
+        >
+          上个月
+        </button>
         <strong>{monthLabel}</strong>
-        <button type="button" onClick={() => setMonthAnchor(addMonths(monthAnchor, 1))}>下个月</button>
+        <button
+          type="button"
+          onClick={() => setMonthAnchor(addMonths(monthAnchor, 1))}
+        >
+          下个月
+        </button>
       </div>
       <div className="completion-strip">
         <span>本月训练完成</span>
-        <strong>{completed}/{monthDays.length}</strong>
-        <div>
-          {monthDays.slice(0, 7).map((day) => (
-            <i key={dateKey(day)} className={checkins[dateKey(day)]?.trainingDone ? "done" : ""} />
-          ))}
+        <strong>
+          {completed}/{monthDays.length}
+        </strong>
+        <div className="month-progress" aria-label={`本月完成率 ${completionRate}%`}>
+          <span style={{ width: `${completionRate}%` }} />
         </div>
+        <em>{completionRate}%</em>
       </div>
       <div className="panel calendar-panel">
         <div className="calendar-weekdays">
@@ -320,39 +445,65 @@ function CalendarPage({
             const plan = withCurrentPower(
               plans[key] ?? defaultPlanForDate(key, settings.ftp, templates),
               settings.ftp,
-              templates
+              templates,
             );
             const dayCheckins = checkins[key] ?? {};
             const score = [
               dayCheckins.trainingDone,
               dayCheckins.proteinDone,
               dayCheckins.dinnerControlled,
-              dayCheckins.earlySleep
+              dayCheckins.earlySleep,
             ].filter(Boolean).length;
 
             return (
-              <div
+              <button
+                type="button"
                 key={key}
                 className={[
                   "calendar-day",
                   inMonth ? "" : "muted-day",
                   key === todayKey() ? "today" : "",
-                  dayCheckins.trainingDone ? "done" : ""
+                  key === selectedDate ? "selected" : "",
+                  dayCheckins.trainingDone ? "done" : "",
                 ].join(" ")}
+                onClick={() => {
+                  setSelectedDate(key);
+                  if (!inMonth) setMonthAnchor(day);
+                }}
               >
                 <div className="calendar-day-head">
                   <strong>{day.getDate()}</strong>
                 </div>
-                <span className={`calendar-kind kind-${plan.kind}`}>{labelKind(plan.kind)}</span>
+                <span className={`calendar-kind kind-${plan.kind}`}>
+                  {labelKind(plan.kind)}
+                </span>
                 <div className="calendar-dots" aria-label={`完成 ${score}/4`}>
                   {[0, 1, 2, 3].map((item) => (
                     <i key={item} className={item < score ? "on" : ""} />
                   ))}
                 </div>
-              </div>
+              </button>
             );
           })}
         </div>
+      </div>
+      <div className="panel memo-editor">
+        <div className="plan-head">
+          <div>
+            <p className="plan-date">{formatChineseDate(selectedDate)}</p>
+            <h3>{selectedPlan.title}</h3>
+          </div>
+          <KindTag kind={selectedPlan.kind} />
+        </div>
+        <label>
+          当天备忘
+          <Textarea
+            value={dayMemos[selectedDate]?.text ?? ""}
+            placeholder="例如：今天状态、临时调整、饮食备注..."
+            autosize={{ minRows: 3, maxRows: 6 }}
+            onChange={(value) => onMemoChange(selectedDate, String(value))}
+          />
+        </label>
       </div>
     </section>
   );
@@ -367,7 +518,7 @@ function PlanPage({
   onWeekChange,
   onPlanChange,
   onTemplate,
-  onTrainingDone
+  onTrainingDone,
 }: {
   settings: SettingsState;
   plans: Record<string, PlanDay>;
@@ -380,26 +531,66 @@ function PlanPage({
   onTrainingDone: (date: string, value: boolean) => void;
 }) {
   const week = getWeekDays(weekStart);
-  const completedCount = week.filter((day) => checkins[dateKey(day)]?.trainingDone).length;
+  const completedCount = week.filter(
+    (day) => checkins[dateKey(day)]?.trainingDone,
+  ).length;
+  const cardRefs = useRef<Record<string, HTMLElement | null>>({});
+  const didAutoScroll = useRef(false);
+
+  useEffect(() => {
+    if (didAutoScroll.current) return;
+    const today = todayKey();
+    const target = cardRefs.current[today];
+    if (!target) return;
+    didAutoScroll.current = true;
+    window.setTimeout(
+      () => target.scrollIntoView({ block: "start", behavior: "smooth" }),
+      80,
+    );
+  }, [weekStart]);
+
+  const scrollToDate = (date: string) => {
+    cardRefs.current[date]?.scrollIntoView({
+      block: "start",
+      behavior: "smooth",
+    });
+  };
 
   return (
     <section className="stack">
       <div className="week-switch">
-        <button type="button" onClick={() => onWeekChange(addDays(weekStart, -7))}>上一周</button>
-        <strong>{formatMonthDay(week[0])} - {formatMonthDay(week[6])}</strong>
-        <button type="button" onClick={() => onWeekChange(addDays(weekStart, 7))}>下一周</button>
+        <button
+          type="button"
+          onClick={() => onWeekChange(addDays(weekStart, -7))}
+        >
+          上一周
+        </button>
+        <strong>
+          {formatMonthDay(week[0])} - {formatMonthDay(week[6])}
+        </strong>
+        <button
+          type="button"
+          onClick={() => onWeekChange(addDays(weekStart, 7))}
+        >
+          下一周
+        </button>
       </div>
-      <div className="completion-strip" aria-label="本周训练完成情况">
+      <div
+        className="completion-strip sticky-progress"
+        aria-label="本周训练完成情况"
+      >
         <span>本周完成</span>
         <strong>{completedCount}/7</strong>
         <div>
           {week.map((day) => {
             const key = dateKey(day);
             return (
-              <i
+              <button
+                type="button"
                 key={key}
                 className={checkins[key]?.trainingDone ? "done" : ""}
                 title={formatChineseDate(key)}
+                onClick={() => scrollToDate(key)}
               />
             );
           })}
@@ -411,14 +602,20 @@ function PlanPage({
         const plan = withCurrentPower(
           plans[key] ?? defaultPlanForDate(key, settings.ftp, templates),
           settings.ftp,
-          templates
+          templates,
         );
         return (
-          <article className="panel plan-editor" key={key}>
+          <article
+            className="panel plan-editor"
+            key={key}
+            ref={(element) => {
+              cardRefs.current[key] = element;
+            }}
+          >
             <div className="plan-head">
               <div>
-                <p className="eyebrow">{formatChineseDate(key)}</p>
-                <h3>{plan.title}</h3>
+                <p className="plan-date">{formatChineseDate(key)}</p>
+                <h3 className="plan-title">{plan.title}</h3>
               </div>
               <div className="plan-status">
                 <KindTag kind={plan.kind} />
@@ -428,7 +625,9 @@ function PlanPage({
                   theme={checkins[key]?.trainingDone ? "primary" : "default"}
                   variant={checkins[key]?.trainingDone ? "base" : "outline"}
                   className={checkins[key]?.trainingDone ? "done" : ""}
-                  onClick={() => onTrainingDone(key, !checkins[key]?.trainingDone)}
+                  onClick={() =>
+                    onTrainingDone(key, !checkins[key]?.trainingDone)
+                  }
                   aria-pressed={Boolean(checkins[key]?.trainingDone)}
                   icon={<Check size={16} />}
                 >
@@ -438,15 +637,26 @@ function PlanPage({
             </div>
             <label>
               模板
-              <select value={plan.templateId ?? ""} onChange={(event) => onTemplate(key, event.target.value)}>
+              <select
+                value={plan.templateId ?? ""}
+                onChange={(event) => onTemplate(key, event.target.value)}
+              >
                 {templates.map((template) => (
-                  <option key={template.id} value={template.id}>{template.name}</option>
+                  <option key={template.id} value={template.id}>
+                    {template.name}
+                  </option>
                 ))}
               </select>
             </label>
             <label>
               标题
-              <Input value={plan.title} clearable onChange={(value) => onPlanChange(key, { title: String(value) })} />
+              <Input
+                value={plan.title}
+                clearable
+                onChange={(value) =>
+                  onPlanChange(key, { title: String(value) })
+                }
+              />
             </label>
             {plan.kind !== "rest" && (
               <label>
@@ -454,20 +664,34 @@ function PlanPage({
                 <Input
                   type="number"
                   value={plan.durationMinutes ?? ""}
-                  onChange={(value) => onPlanChange(key, { durationMinutes: Number(value) })}
+                  onChange={(value) =>
+                    onPlanChange(key, { durationMinutes: Number(value) })
+                  }
                 />
               </label>
             )}
             {plan.kind !== "rest" && plan.powerRange && (
-              <div className="inline-summary">当前 FTP 下目标功率：{plan.powerRange[0]}-{plan.powerRange[1]}W</div>
+              <div className="inline-summary">
+                当前 FTP 下目标功率：{plan.powerRange[0]}-{plan.powerRange[1]}W
+              </div>
             )}
-            {plan.rideDetails && <div className="inline-summary">{plan.rideDetails}</div>}
+            {plan.rideDetails && (
+              <div className="inline-summary">{plan.rideDetails}</div>
+            )}
             {plan.exercises && <StrengthList plan={plan} />}
             <label>
               备注
-              <Textarea value={plan.notes ?? ""} autosize={{ minRows: 2, maxRows: 5 }} onChange={(value) => onPlanChange(key, { notes: String(value) })} />
+              <Textarea
+                value={plan.notes ?? ""}
+                autosize={{ minRows: 2, maxRows: 5 }}
+                onChange={(value) =>
+                  onPlanChange(key, { notes: String(value) })
+                }
+              />
             </label>
-            {plan.nutrition && <p className="nutrition-note">{plan.nutrition}</p>}
+            {plan.nutrition && (
+              <p className="nutrition-note">{plan.nutrition}</p>
+            )}
           </article>
         );
       })}
@@ -477,44 +701,79 @@ function PlanPage({
 
 function BodyPage({
   entries,
-  onSave
+  onSave,
 }: {
   entries: Record<string, BodyEntry>;
   onSave: (entry: BodyEntry) => void;
 }) {
   const [date, setDate] = useState(todayKey());
-  const entry = entries[date] ?? { date, weightKg: "", bodyFat: "", waistCm: "", chestCm: "", notes: "" };
+  const entry = entries[date] ?? {
+    date,
+    weightKg: "",
+    bodyFat: "",
+    waistCm: "",
+    chestCm: "",
+    notes: "",
+  };
 
-  const update = (patch: Partial<BodyEntry>) => onSave({ ...entry, ...patch, date });
+  const update = (patch: Partial<BodyEntry>) =>
+    onSave({ ...entry, ...patch, date });
 
   return (
     <section className="stack">
       <div className="panel">
         <h2>身体记录</h2>
-        <WeekDatePicker selectedDate={date} entries={entries} onSelect={setDate} />
+        <WeekDatePicker
+          selectedDate={date}
+          entries={entries}
+          onSelect={setDate}
+        />
         <div className="form-grid">
           <label>
             体重 kg
-            <Input type="number" value={entry.weightKg} clearable onChange={(value) => update({ weightKg: String(value) })} />
+            <Input
+              type="number"
+              value={entry.weightKg}
+              clearable
+              onChange={(value) => update({ weightKg: String(value) })}
+            />
           </label>
           <label>
             体脂 %
-            <Input type="number" value={entry.bodyFat ?? ""} clearable onChange={(value) => update({ bodyFat: String(value) })} />
+            <Input
+              type="number"
+              value={entry.bodyFat ?? ""}
+              clearable
+              onChange={(value) => update({ bodyFat: String(value) })}
+            />
           </label>
           <label>
             腰围 cm
-            <Input type="number" value={entry.waistCm ?? ""} clearable onChange={(value) => update({ waistCm: String(value) })} />
+            <Input
+              type="number"
+              value={entry.waistCm ?? ""}
+              clearable
+              onChange={(value) => update({ waistCm: String(value) })}
+            />
           </label>
           <label>
             胸围 cm
-            <Input type="number" value={entry.chestCm ?? ""} clearable onChange={(value) => update({ chestCm: String(value) })} />
+            <Input
+              type="number"
+              value={entry.chestCm ?? ""}
+              clearable
+              onChange={(value) => update({ chestCm: String(value) })}
+            />
           </label>
         </div>
         <label>
           备注
-          <Textarea value={entry.notes ?? ""} autosize={{ minRows: 2, maxRows: 5 }} onChange={(value) => update({ notes: String(value) })} />
+          <Textarea
+            value={entry.notes ?? ""}
+            autosize={{ minRows: 2, maxRows: 5 }}
+            onChange={(value) => update({ notes: String(value) })}
+          />
         </label>
-        <p className="muted">输入后自动保存在本机浏览器 IndexedDB。</p>
       </div>
       <BodyStats entries={entries} />
     </section>
@@ -525,9 +784,11 @@ function BodyStats({ entries }: { entries: Record<string, BodyEntry> }) {
   const points = useMemo(
     () =>
       Object.values(entries)
-        .filter((entry) => Number(entry.weightKg) > 0 || Number(entry.waistCm) > 0)
+        .filter(
+          (entry) => Number(entry.weightKg) > 0 || Number(entry.waistCm) > 0,
+        )
         .sort((a, b) => a.date.localeCompare(b.date)),
-    [entries]
+    [entries],
   );
 
   return (
@@ -547,7 +808,7 @@ function BodyStats({ entries }: { entries: Record<string, BodyEntry> }) {
 function WeekDatePicker({
   selectedDate,
   entries,
-  onSelect
+  onSelect,
 }: {
   selectedDate: string;
   entries: Record<string, BodyEntry>;
@@ -559,15 +820,30 @@ function WeekDatePicker({
   return (
     <div className="week-date-picker">
       <div className="week-switch compact">
-        <button type="button" onClick={() => onSelect(dateKey(addDays(selected, -7)))}>上一周</button>
-        <strong>{formatMonthDay(week[0])} - {formatMonthDay(week[6])}</strong>
-        <button type="button" onClick={() => onSelect(dateKey(addDays(selected, 7)))}>下一周</button>
+        <button
+          type="button"
+          onClick={() => onSelect(dateKey(addDays(selected, -7)))}
+        >
+          上一周
+        </button>
+        <strong>
+          {formatMonthDay(week[0])} - {formatMonthDay(week[6])}
+        </strong>
+        <button
+          type="button"
+          onClick={() => onSelect(dateKey(addDays(selected, 7)))}
+        >
+          下一周
+        </button>
       </div>
       <div className="week-date-row">
         {week.map((day) => {
           const key = dateKey(day);
           const entry = entries[key];
-          const hasBodyData = Boolean(entry && (entry.weightKg || entry.waistCm || entry.bodyFat || entry.chestCm));
+          const hasBodyData = Boolean(
+            entry &&
+            (entry.weightKg || entry.waistCm || entry.bodyFat || entry.chestCm),
+          );
           return (
             <button
               key={key}
@@ -575,11 +851,15 @@ function WeekDatePicker({
               className={[
                 key === selectedDate ? "active" : "",
                 key === todayKey() ? "today" : "",
-                hasBodyData ? "has-data" : ""
+                hasBodyData ? "has-data" : "",
               ].join(" ")}
               onClick={() => onSelect(key)}
             >
-              <span>{new Intl.DateTimeFormat("zh-CN", { weekday: "short" }).format(day)}</span>
+              <span>
+                {new Intl.DateTimeFormat("zh-CN", { weekday: "short" }).format(
+                  day,
+                )}
+              </span>
               <strong>{day.getDate()}</strong>
               <i />
             </button>
@@ -597,7 +877,7 @@ function SettingsPage({
   onTemplates,
   onExport,
   onImport,
-  onClear
+  onClear,
 }: {
   settings: SettingsState;
   templates: TrainingTemplate[];
@@ -608,7 +888,8 @@ function SettingsPage({
   onClear: () => void;
 }) {
   const [selectedId, setSelectedId] = useState(templates[0]?.id ?? "");
-  const selected = templates.find((template) => template.id === selectedId) ?? templates[0];
+  const selected =
+    templates.find((template) => template.id === selectedId) ?? templates[0];
 
   useEffect(() => {
     if (!templates.some((template) => template.id === selectedId)) {
@@ -622,8 +903,8 @@ function SettingsPage({
       templates.map((template) =>
         template.id === selected.id
           ? { ...template, ...patch, templateId: template.id }
-          : template
-      )
+          : template,
+      ),
     );
   };
 
@@ -635,14 +916,24 @@ function SettingsPage({
 
   const deleteTemplate = () => {
     if (!selected || templates.length <= 1) return;
-    if (!window.confirm(`删除模板“${selected.name}”？已安排到日计划里的内容不会自动删除。`)) return;
+    if (
+      !window.confirm(
+        `删除模板“${selected.name}”？已安排到日计划里的内容不会自动删除。`,
+      )
+    )
+      return;
     const next = templates.filter((template) => template.id !== selected.id);
     onTemplates(next);
     setSelectedId(next[0]?.id ?? "");
   };
 
   const resetTemplates = () => {
-    if (!window.confirm("恢复默认模板？这会替换当前模板库，但不会删除已经编辑过的周计划。")) return;
+    if (
+      !window.confirm(
+        "恢复默认模板？这会替换当前模板库，但不会删除已经编辑过的周计划。",
+      )
+    )
+      return;
     onTemplates(defaultTrainingTemplates);
     setSelectedId(defaultTrainingTemplates[0].id);
   };
@@ -656,22 +947,52 @@ function SettingsPage({
           <Input
             type="number"
             value={settings.ftp}
-            onChange={(value) => onSettings({ ...settings, ftp: Number(value) })}
+            onChange={(value) =>
+              onSettings({ ...settings, ftp: Number(value) })
+            }
           />
         </label>
         <div className="zones">
-          <PowerZone name="Z1恢复" range={[0, 96 / 175]} ftp={settings.ftp} prefix="<" />
-          <PowerZone name="Z2耐力" range={[98 / 175, 131 / 175]} ftp={settings.ftp} />
-          <PowerZone name="Z3节奏" range={[132 / 175, 157 / 175]} ftp={settings.ftp} />
-          <PowerZone name="甜区" range={[154 / 175, 164 / 175]} ftp={settings.ftp} />
-          <PowerZone name="阈值" range={[166 / 175, 184 / 175]} ftp={settings.ftp} />
+          <PowerZone
+            name="Z1恢复"
+            range={[0, 96 / 175]}
+            ftp={settings.ftp}
+            prefix="<"
+          />
+          <PowerZone
+            name="Z2耐力"
+            range={[98 / 175, 131 / 175]}
+            ftp={settings.ftp}
+          />
+          <PowerZone
+            name="Z3节奏"
+            range={[132 / 175, 157 / 175]}
+            ftp={settings.ftp}
+          />
+          <PowerZone
+            name="甜区"
+            range={[154 / 175, 164 / 175]}
+            ftp={settings.ftp}
+          />
+          <PowerZone
+            name="阈值"
+            range={[166 / 175, 184 / 175]}
+            ftp={settings.ftp}
+          />
         </div>
       </div>
 
       <div className="panel template-panel">
         <div className="section-head">
           <h2>训练模板</h2>
-          <Button size="small" shape="round" theme="primary" variant="outline" icon={<Plus size={17} />} onClick={addTemplate}>
+          <Button
+            size="small"
+            shape="round"
+            theme="primary"
+            variant="outline"
+            icon={<Plus size={17} />}
+            onClick={addTemplate}
+          >
             新增
           </Button>
         </div>
@@ -679,22 +1000,33 @@ function SettingsPage({
           <>
             <label>
               选择模板
-              <select value={selected.id} onChange={(event) => setSelectedId(event.target.value)}>
+              <select
+                value={selected.id}
+                onChange={(event) => setSelectedId(event.target.value)}
+              >
                 {templates.map((template) => (
-                  <option key={template.id} value={template.id}>{template.name}</option>
+                  <option key={template.id} value={template.id}>
+                    {template.name}
+                  </option>
                 ))}
               </select>
             </label>
             <div className="form-grid">
               <label>
                 模板名
-                <Input value={selected.name} clearable onChange={(value) => updateTemplate({ name: String(value) })} />
+                <Input
+                  value={selected.name}
+                  clearable
+                  onChange={(value) => updateTemplate({ name: String(value) })}
+                />
               </label>
               <label>
                 类型
                 <select
                   value={selected.kind}
-                  onChange={(event) => updateTemplate({ kind: event.target.value as TrainingKind })}
+                  onChange={(event) =>
+                    updateTemplate({ kind: event.target.value as TrainingKind })
+                  }
                 >
                   <option value="recovery">恢复</option>
                   <option value="z2">Z2</option>
@@ -708,7 +1040,11 @@ function SettingsPage({
             </div>
             <label>
               计划标题
-              <Input value={selected.title} clearable onChange={(value) => updateTemplate({ title: String(value) })} />
+              <Input
+                value={selected.title}
+                clearable
+                onChange={(value) => updateTemplate({ title: String(value) })}
+              />
             </label>
             {selected.kind !== "rest" && (
               <div className="form-grid">
@@ -717,7 +1053,9 @@ function SettingsPage({
                   <Input
                     type="number"
                     value={selected.durationMinutes ?? ""}
-                    onChange={(value) => updateTemplate({ durationMinutes: Number(value) })}
+                    onChange={(value) =>
+                      updateTemplate({ durationMinutes: Number(value) })
+                    }
                   />
                 </label>
                 <label>
@@ -725,7 +1063,11 @@ function SettingsPage({
                   <Input
                     value={formatRangePercent(selected.rangePercent)}
                     placeholder="例如 63-72"
-                    onChange={(value) => updateTemplate({ rangePercent: parseRangePercent(String(value)) })}
+                    onChange={(value) =>
+                      updateTemplate({
+                        rangePercent: parseRangePercent(String(value)),
+                      })
+                    }
                   />
                 </label>
               </div>
@@ -736,25 +1078,55 @@ function SettingsPage({
                 <Textarea
                   value={formatExercises(selected.exercises)}
                   autosize={{ minRows: 4, maxRows: 8 }}
-                  onChange={(value) => updateTemplate({ exercises: parseExercises(String(value)) })}
+                  onChange={(value) =>
+                    updateTemplate({ exercises: parseExercises(String(value)) })
+                  }
                 />
               </label>
             )}
             <label>
               骑行说明
-              <Textarea value={selected.rideDetails ?? ""} autosize={{ minRows: 2, maxRows: 5 }} onChange={(value) => updateTemplate({ rideDetails: String(value) })} />
+              <Textarea
+                value={selected.rideDetails ?? ""}
+                autosize={{ minRows: 2, maxRows: 5 }}
+                onChange={(value) =>
+                  updateTemplate({ rideDetails: String(value) })
+                }
+              />
             </label>
             <label>
               饮食提示
-              <Textarea value={selected.nutrition ?? ""} autosize={{ minRows: 2, maxRows: 5 }} onChange={(value) => updateTemplate({ nutrition: String(value) })} />
+              <Textarea
+                value={selected.nutrition ?? ""}
+                autosize={{ minRows: 2, maxRows: 5 }}
+                onChange={(value) =>
+                  updateTemplate({ nutrition: String(value) })
+                }
+              />
             </label>
             <label>
               备注
-              <Textarea value={selected.notes ?? ""} autosize={{ minRows: 2, maxRows: 5 }} onChange={(value) => updateTemplate({ notes: String(value) })} />
+              <Textarea
+                value={selected.notes ?? ""}
+                autosize={{ minRows: 2, maxRows: 5 }}
+                onChange={(value) => updateTemplate({ notes: String(value) })}
+              />
             </label>
             <div className="action-row">
-              <Button variant="outline" icon={<RotateCcw size={17} />} onClick={resetTemplates}>恢复默认</Button>
-              <Button theme="danger" variant="outline" icon={<Trash2 size={17} />} onClick={deleteTemplate} disabled={templates.length <= 1}>
+              <Button
+                variant="outline"
+                icon={<RotateCcw size={17} />}
+                onClick={resetTemplates}
+              >
+                恢复默认
+              </Button>
+              <Button
+                theme="danger"
+                variant="outline"
+                icon={<Trash2 size={17} />}
+                onClick={deleteTemplate}
+                disabled={templates.length <= 1}
+              >
                 删除模板
               </Button>
             </div>
@@ -765,9 +1137,17 @@ function SettingsPage({
       <div className="panel">
         <h2>数据管理</h2>
         <div className="action-list">
-          <Button block variant="outline" icon={<Download size={18} />} onClick={onExport}>导出 JSON 备份</Button>
+          <Button
+            block
+            variant="outline"
+            icon={<Download size={18} />}
+            onClick={onExport}
+          >
+            导出 JSON 备份
+          </Button>
           <label className="file-button">
-            <Upload size={18} />导入 JSON 恢复
+            <Upload size={18} />
+            导入 JSON 恢复
             <input
               type="file"
               accept="application/json"
@@ -778,7 +1158,15 @@ function SettingsPage({
               }}
             />
           </label>
-          <Button block theme="danger" variant="outline" icon={<RotateCcw size={18} />} onClick={onClear}>清空本地数据</Button>
+          <Button
+            block
+            theme="danger"
+            variant="outline"
+            icon={<RotateCcw size={18} />}
+            onClick={onClear}
+          >
+            清空本地数据
+          </Button>
         </div>
       </div>
     </section>
@@ -789,7 +1177,7 @@ function PowerZone({
   name,
   range,
   ftp,
-  prefix
+  prefix,
 }: {
   name: string;
   range: [number, number];
@@ -807,7 +1195,9 @@ function PowerZone({
 }
 
 function downloadJson(data: unknown) {
-  const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+  const blob = new Blob([JSON.stringify(data, null, 2)], {
+    type: "application/json",
+  });
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
@@ -823,5 +1213,5 @@ async function importJson(file: File) {
 createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <App />
-  </React.StrictMode>
+  </React.StrictMode>,
 );
