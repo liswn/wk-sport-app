@@ -2913,8 +2913,14 @@ button:disabled {
 }
 
 .file-button {
-  justify-content: flex-start;
-  padding: 0 12px;
+  justify-content: center;
+  padding: 12px;
+  border: 1px solid
+    var(
+      --td-button-default-outline-border-color,
+      var(--td-component-border, var(--td-gray-color-4, #dcdcdc))
+    );
+  border-radius: var(--td-button-border-radius, var(--td-radius-default, 6px));
 }
 
 .file-button {
