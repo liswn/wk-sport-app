@@ -70,10 +70,12 @@ import {
   getTemplate,
 } from "./model";
 import type {
+  AiCoachReply,
   AiTrainingRecommendation,
   TrainingHistorySummary,
 } from "./integrations";
 import {
+  parseAiCoachReply,
   requestAiCoachChat,
   requestAiFatigueAnalysis,
   requestAiTrainingRecommendation,
@@ -530,8 +532,8 @@ function App() {
               onExport={() => handleExport()}
               onImport={async (file) => {
                 await handleExport("before-import");
-                return importJson(file).then((payload) => {
-                  const data = payload.data ?? payload;
+                return importJson(file).then(async (payload) => {
+                  const data = await importData(payload);
                   setSettings(data.settings ?? DEFAULT_SETTINGS);
                   setPlans(data.plans ?? {});
                   setBodyEntries(data.bodyEntries ?? {});
@@ -544,7 +546,6 @@ function App() {
                   setTrainingTemplates(
                     data.trainingTemplates ?? defaultTrainingTemplates,
                   );
-                  return importData(payload);
                 });
               }}
               onClear={async () => {
@@ -2889,12 +2890,32 @@ function TrainingCoachSheet({
   const messageListRef = useRef<HTMLDivElement | null>(null);
   const longPressTimer = useRef<number | undefined>(undefined);
   const messages = session?.messages ?? [];
+  const messageViews = useMemo(
+    () =>
+      messages.map((message) => ({
+        message,
+        reply:
+          message.role === "assistant"
+            ? parseAiCoachReply(message.content, weekPlans)
+            : undefined,
+      })),
+    [messages, weekPlans],
+  );
   const actionMessage = messageActionMenu
     ? messages.find((message) => message.id === messageActionMenu.messageId)
     : undefined;
   const pendingPatch = session?.pendingPatch?.appliedAt
     ? undefined
     : session?.pendingPatch;
+  const recoveredReply = useMemo(() => {
+    if (pendingPatch) return undefined;
+    for (const view of [...messageViews].reverse()) {
+      const { message, reply } = view;
+      if (reply?.planPatch) return { messageId: message.id, reply };
+    }
+    return undefined;
+  }, [messageViews, pendingPatch]);
+  const activePatch = pendingPatch ?? recoveredReply?.reply.planPatch;
   const quickQuestions = [
     "今天适合练吗？",
     "本周计划要不要降载？",
@@ -2904,14 +2925,24 @@ function TrainingCoachSheet({
 
   const saveSession = (
     nextMessages: AiChatMessage[],
-    pendingPatchNext = pendingPatch,
+    pendingPatchNext: AiPlanPatch | undefined | null = pendingPatch,
   ) => {
     onSession({
       messages: nextMessages.slice(-50),
-      pendingPatch: pendingPatchNext,
+      pendingPatch: pendingPatchNext === null ? undefined : pendingPatchNext,
       updatedAt: new Date().toISOString(),
     });
   };
+
+  useEffect(() => {
+    if (!visible || pendingPatch || !recoveredReply?.reply.planPatch) return;
+    const nextMessages = messages.map((message) =>
+      message.id === recoveredReply.messageId
+        ? { ...message, content: recoveredReply.reply.message }
+        : message,
+    );
+    saveSession(nextMessages, recoveredReply.reply.planPatch);
+  }, [visible, pendingPatch, recoveredReply, messages]);
 
   useEffect(() => {
     if (!visible) return;
@@ -2919,7 +2950,7 @@ function TrainingCoachSheet({
       const node = messageListRef.current;
       if (node) node.scrollTop = node.scrollHeight;
     }, 40);
-  }, [visible, messages.length, loading, pendingPatch?.id]);
+  }, [visible, messages.length, loading, activePatch?.id]);
 
   const sendQuestion = async (value?: string) => {
     const question = (value ?? input).trim();
@@ -2956,9 +2987,13 @@ function TrainingCoachSheet({
         history,
         lastFatigueReport,
       });
+      const normalizedReply = normalizeCoachReplyForUi(reply, weekPlans);
       saveSession(
-        [...nextMessages, createChatMessage("assistant", reply.message)],
-        reply.planPatch ?? pendingPatch,
+        [
+          ...nextMessages,
+          createChatMessage("assistant", normalizedReply.message),
+        ],
+        normalizedReply.planPatch ?? pendingPatch,
       );
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -2969,18 +3004,19 @@ function TrainingCoachSheet({
   };
 
   const applyPatch = () => {
-    if (!pendingPatch) return;
+    if (!activePatch) return;
     const appliedPatch = {
-      ...pendingPatch,
+      ...activePatch,
       appliedAt: new Date().toISOString(),
     };
-    onApplyPatch(pendingPatch);
+    onApplyPatch(activePatch);
+    const nextMessages = sanitizeRecoveredCoachMessages(messages, weekPlans);
     saveSession(
       [
-        ...messages,
+        ...nextMessages,
         createChatMessage(
           "assistant",
-          `已应用计划修改：${pendingPatch.summary}`,
+          `已应用计划修改：${activePatch.summary}`,
         ),
       ],
       appliedPatch,
@@ -2988,7 +3024,7 @@ function TrainingCoachSheet({
   };
 
   const dismissPatch = () => {
-    saveSession(messages, undefined);
+    saveSession(sanitizeRecoveredCoachMessages(messages, weekPlans), null);
   };
 
   const deleteMessage = (messageId: string) => {
@@ -3067,8 +3103,8 @@ function TrainingCoachSheet({
         </div>
 
         <div className="coach-messages" ref={messageListRef}>
-          {messages.length ? (
-            messages.map((message) => (
+          {messageViews.length ? (
+            messageViews.map(({ message, reply }) => (
               <div
                 key={message.id}
                 className={`coach-message ${message.role}`}
@@ -3078,7 +3114,7 @@ function TrainingCoachSheet({
                 onPointerLeave={cancelMessagePress}
                 onContextMenu={(event) => event.preventDefault()}
               >
-                <p>{message.content}</p>
+                <p>{formatCoachMessageContent(message, reply)}</p>
               </div>
             ))
           ) : (
@@ -3089,14 +3125,14 @@ function TrainingCoachSheet({
           {loading && <div className="coach-empty">正在分析训练记录...</div>}
         </div>
 
-        {pendingPatch && (
+        {activePatch && (
           <div className="coach-patch">
             <div className="ai-preview-head">
-              <strong>{pendingPatch.summary}</strong>
-              <span>{pendingPatch.scope === "week" ? "整周" : "单日"}</span>
+              <strong>{activePatch.summary}</strong>
+              <span>{activePatch.scope === "week" ? "整周" : "单日"}</span>
             </div>
             <div className="coach-patch-list">
-              {pendingPatch.changes.map((change) => (
+              {activePatch.changes.map((change) => (
                 <div key={change.date}>
                   <strong>{formatChineseDate(change.date)}</strong>
                   <p>
@@ -4108,12 +4144,15 @@ function SettingsPage({
       />
       <Dialog
         visible={Boolean(templateDialog)}
-        title={templateDialog === "delete" ? "删除训练模板？" : "恢复默认模板？"}
+        title={
+          templateDialog === "delete" ? "删除训练模板？" : "恢复默认模板？"
+        }
         content={
           <div className="dialog-copy">
             {templateDialog === "delete" ? (
               <p>
-                删除模板“{selected?.name ?? ""}”？已安排到日计划里的内容不会自动删除。
+                删除模板“{selected?.name ?? ""}
+                ”？已安排到日计划里的内容不会自动删除。
               </p>
             ) : (
               <p>
@@ -4126,7 +4165,9 @@ function SettingsPage({
         confirmBtn={templateDialog === "delete" ? "确认删除" : "确认恢复"}
         onClose={() => setTemplateDialog(null)}
         onCancel={() => setTemplateDialog(null)}
-        onConfirm={templateDialog === "delete" ? deleteTemplate : resetTemplates}
+        onConfirm={
+          templateDialog === "delete" ? deleteTemplate : resetTemplates
+        }
       />
     </section>
   );
@@ -5182,6 +5223,43 @@ function createChatMessage(
     content,
     createdAt: new Date().toISOString(),
   };
+}
+
+function normalizeCoachReplyForUi(
+  reply: {
+    rawText: string;
+    message: string;
+    planPatch?: AiPlanPatch;
+  },
+  weekPlans: PlanDay[],
+) {
+  if (reply.planPatch) return reply;
+  const candidates = [
+    parseAiCoachReply(JSON.stringify(reply), weekPlans),
+    parseAiCoachReply(reply.rawText, weekPlans),
+    parseAiCoachReply(reply.message, weekPlans),
+  ];
+  return candidates.find((candidate) => candidate.planPatch) ?? reply;
+}
+
+function formatCoachMessageContent(
+  message: AiChatMessage,
+  parsedReply?: AiCoachReply,
+) {
+  if (message.role !== "assistant") return message.content;
+  const reply = parsedReply;
+  return reply?.planPatch ? reply.message : message.content;
+}
+
+function sanitizeRecoveredCoachMessages(
+  messages: AiChatMessage[],
+  weekPlans: PlanDay[],
+) {
+  return messages.map((message) => {
+    if (message.role !== "assistant") return message;
+    const reply = parseAiCoachReply(message.content, weekPlans);
+    return reply.planPatch ? { ...message, content: reply.message } : message;
+  });
 }
 
 function countRecord(record: Record<string, unknown>) {

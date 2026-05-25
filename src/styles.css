@@ -2114,7 +2114,8 @@ h3 {
 }
 
 .coach-sheet {
-  display: grid;
+  display: flex;
+  flex-flow: column;
   height: 90vh;
   gap: 12px;
   overflow: hidden;

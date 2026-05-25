@@ -136,9 +136,9 @@ export async function syncIntervalsAnalysis({
   date: string;
   plan: PlanDay;
 }) {
-  const activities = (await fetchIntervalsActivities(settings, date, date)).filter((activity) =>
-    isSameLocalDate(activity, date),
-  );
+  const activities = (
+    await fetchIntervalsActivities(settings, date, date)
+  ).filter((activity) => isSameLocalDate(activity, date));
 
   return buildActivityAnalysis(date, plan, activities);
 }
@@ -178,7 +178,9 @@ export async function pushIntervalsWeekPlan({
     throw new Error("当前没有可同步的计划。");
   }
 
-  const events = plans.map((plan) => buildIntervalsPlanEvent(plan, settings.ftp));
+  const events = plans.map((plan) =>
+    buildIntervalsPlanEvent(plan, settings.ftp),
+  );
   const base = getIntervalsBase(settings);
   const athleteId = getIntervalsAthleteId(settings);
   const url = `${base}/athlete/${encodeURIComponent(athleteId)}/events/bulk?upsert=true`;
@@ -193,7 +195,9 @@ export async function pushIntervalsWeekPlan({
   });
 
   if (!response.ok) {
-    throw new Error(`Intervals.icu 写入计划失败：${response.status} ${response.statusText}`);
+    throw new Error(
+      `Intervals.icu 写入计划失败：${response.status} ${response.statusText}`,
+    );
   }
 
   const payload = await response.json().catch(() => []);
@@ -222,7 +226,9 @@ async function fetchIntervalsActivities(
   });
 
   if (!response.ok) {
-    throw new Error(`Intervals.icu 同步失败：${response.status} ${response.statusText}`);
+    throw new Error(
+      `Intervals.icu 同步失败：${response.status} ${response.statusText}`,
+    );
   }
 
   const payload = await response.json();
@@ -230,11 +236,17 @@ async function fetchIntervalsActivities(
 }
 
 function getIntervalsBase(settings: SettingsState) {
-  return (settings.intervalsApiBase || "https://intervals.icu/api/v1").replace(/\/$/, "");
+  return (settings.intervalsApiBase || "https://intervals.icu/api/v1").replace(
+    /\/$/,
+    "",
+  );
 }
 
 function getIntervalsAthleteId(settings: SettingsState) {
-  if (!settings.intervalsApiKey?.trim() || !settings.intervalsAthleteId?.trim()) {
+  if (
+    !settings.intervalsApiKey?.trim() ||
+    !settings.intervalsAthleteId?.trim()
+  ) {
     throw new Error("请先在设置里填写 Intervals.icu Athlete ID 和 API Key。");
   }
   return settings.intervalsAthleteId.trim();
@@ -247,7 +259,10 @@ function getIntervalsAuthHeader(settings: SettingsState) {
   return `Basic ${btoa(`API_KEY:${settings.intervalsApiKey.trim()}`)}`;
 }
 
-function buildIntervalsPlanEvent(plan: PlanDay, ftp: number): IntervalsPlanEvent {
+function buildIntervalsPlanEvent(
+  plan: PlanDay,
+  ftp: number,
+): IntervalsPlanEvent {
   const hasRide = plan.kind !== "rest" && Boolean(plan.durationMinutes);
   const hasStrength = Boolean(plan.exercises?.length);
   const description = buildIntervalsWorkoutDescription(plan, ftp);
@@ -264,7 +279,9 @@ function buildIntervalsPlanEvent(plan: PlanDay, ftp: number): IntervalsPlanEvent
   }
 
   const movingTime =
-    (hasRide ? plan.durationMinutes ?? 0 : inferStrengthMinutes(plan.strengthDurationLabel)) * 60;
+    (hasRide
+      ? (plan.durationMinutes ?? 0)
+      : inferStrengthMinutes(plan.strengthDurationLabel)) * 60;
   const trainingLoad = estimatePlannedTrainingLoad(plan, ftp);
 
   return {
@@ -319,7 +336,8 @@ function buildWorkoutStepLines(plan: PlanDay, ftp: number) {
       const target = segment.targetPowerRange
         ? formatPowerRangeTarget(segment.targetPowerRange, ftp)
         : formatPowerTarget(plan, ftp);
-      const line = `${segment.repeat ? `${segment.repeat}x ` : ""}${segment.durationMinutes ?? ""}m ${target} ${segment.name}`.trim();
+      const line =
+        `${segment.repeat ? `${segment.repeat}x ` : ""}${segment.durationMinutes ?? ""}m ${target} ${segment.name}`.trim();
       const recovery = segment.recoveryMinutes
         ? `${segment.recoveryMinutes}m ${
             segment.recoveryPowerRange
@@ -336,7 +354,13 @@ function buildWorkoutStepLines(plan: PlanDay, ftp: number) {
 
   if (plan.kind === "sweetspot" && duration >= 45) {
     const cooldown = Math.max(duration - 46, 5);
-    return ["10m 55%", "Main set 3x", `${8}m ${target}`, "4m 50%", `${cooldown}m 55%`];
+    return [
+      "10m 55%",
+      "Main set 3x",
+      `${8}m ${target}`,
+      "4m 50%",
+      `${cooldown}m 55%`,
+    ];
   }
 
   if (plan.kind === "threshold" && duration >= 45) {
@@ -361,7 +385,7 @@ function formatPowerRangeTarget(range: [number, number], ftp: number) {
 function estimatePlannedTrainingLoad(plan: PlanDay, ftp: number) {
   if (!plan.durationMinutes) return plan.exercises?.length ? 15 : undefined;
   const intensity = plan.powerRange?.length
-    ? ((plan.powerRange[0] + plan.powerRange[1]) / 2) / ftp
+    ? (plan.powerRange[0] + plan.powerRange[1]) / 2 / ftp
     : plan.kind === "threshold"
       ? 0.95
       : plan.kind === "sweetspot"
@@ -371,7 +395,9 @@ function estimatePlannedTrainingLoad(plan: PlanDay, ftp: number) {
           : plan.kind === "recovery"
             ? 0.55
             : 0.5;
-  const load = Math.round((plan.durationMinutes / 60) * intensity * intensity * 100);
+  const load = Math.round(
+    (plan.durationMinutes / 60) * intensity * intensity * 100,
+  );
   return plan.exercises?.length ? load + 15 : load;
 }
 
@@ -381,7 +407,9 @@ function inferStrengthMinutes(value?: string) {
     ?.map((item) => Number(item))
     .filter((item) => Number.isFinite(item));
   if (!numbers?.length) return 25;
-  return Math.round(numbers.reduce((sum, item) => sum + item, 0) / numbers.length);
+  return Math.round(
+    numbers.reduce((sum, item) => sum + item, 0) / numbers.length,
+  );
 }
 
 function labelPlanKind(kind: TrainingKind) {
@@ -518,10 +546,11 @@ export async function requestAiCoachChat({
     "不要修改实际完成记录、打卡、体重、体脂、腰围、胸围、FTP、Intervals.icu 同步结果和历史训练日志。",
     "如果需要调整计划，只能通过 planPatch 给出可预览的计划修改；用户确认后应用才会覆盖计划。",
     "输出必须是一个可以被 JSON.parse 直接解析的单层 JSON 对象，不要 Markdown，不要代码块，不要把 JSON 再作为字符串塞进 message/content 里。",
+    "返回内容必须只有一个根对象，结尾不要多余的右花括号、解释文字或其它字符。",
     "message 只能放给用户看的自然语言短句；planPatch 必须是对象，不允许是字符串。",
     'JSON 格式：{"message":"给用户看的简短中文回复","planPatch":{"summary":"修改摘要","scope":"day|week","changes":[{"date":"YYYY-MM-DD","after":{"title":"训练标题","kind":"recovery|z2|aerobic|sweetspot|threshold|rest","durationMinutes":60,"durationLabel":"60分钟","powerRange":[110,125],"segments":[{"name":"热身","durationMinutes":10,"targetPowerRange":[90,110]},{"name":"主训练","durationMinutes":8,"targetPowerRange":[155,162],"repeat":3,"recoveryMinutes":4,"recoveryPowerRange":[85,100]},{"name":"冷身","durationMinutes":10,"targetPowerRange":[85,100]}],"rideDetails":"骑行说明","exercises":[{"name":"动作","sets":3,"reps":"8-12次"}],"strengthDurationLabel":"20-25分钟","notes":"备注","nutrition":"饮食提示"},"reason":"为什么这么改"}]}}}',
-    "正确示例：{\"message\":\"建议今晚保守低Z2。\",\"planPatch\":{\"summary\":\"把今晚改为低Z2\",\"scope\":\"day\",\"changes\":[{\"date\":\"2026-05-25\",\"after\":{\"title\":\"低Z2骑\",\"kind\":\"z2\",\"durationMinutes\":75,\"powerRange\":[95,115]},\"reason\":\"近期负荷偏高\"}]}}}",
-    "错误示例：{\"message\":\"{\\\"message\\\":\\\"...\\\",\\\"planPatch\\\":{...}}\"}。不要这样返回。",
+    '正确示例：{"message":"建议今晚保守低Z2。","planPatch":{"summary":"把今晚改为低Z2","scope":"day","changes":[{"date":"2026-05-25","after":{"title":"低Z2骑","kind":"z2","durationMinutes":75,"powerRange":[95,115]},"reason":"近期负荷偏高"}]}}}',
+    '错误示例：{"message":"{\\"message\\":\\"...\\",\\"planPatch\\":{...}}"}。不要这样返回。',
     "如果没有计划修改，省略 planPatch。",
     "当前用户目标：",
     settings.goalText?.trim() || "目标：减脂 + 提升骑行功率",
@@ -542,7 +571,9 @@ export async function requestAiCoachChat({
       lastFatigueReport,
     }),
     "最近对话 JSON：",
-    JSON.stringify(messages.slice(-8).map(({ role, content }) => ({ role, content }))),
+    JSON.stringify(
+      messages.slice(-8).map(({ role, content }) => ({ role, content })),
+    ),
     "用户问题：",
     question,
   ].join("\n");
@@ -602,7 +633,8 @@ async function requestOpenAiCompatibleChat({
     payload?.output_text ??
     payload?.content ??
     "";
-  if (!String(content).trim()) throw new Error("AI 返回为空，请检查供应商接口格式。");
+  if (!String(content).trim())
+    throw new Error("AI 返回为空，请检查供应商接口格式。");
   return String(content).trim();
 }
 
@@ -635,10 +667,7 @@ function parseAiRecommendation(
     [];
   const plans = basePlans
     .map((basePlan, index) =>
-      sanitizeAiPlanDay(
-        findAiDay(rawDays, basePlan.date, index),
-        basePlan,
-      ),
+      sanitizeAiPlanDay(findAiDay(rawDays, basePlan.date, index), basePlan),
     )
     .filter(Boolean) as PlanDay[];
 
@@ -653,73 +682,162 @@ function parseAiRecommendation(
   };
 }
 
-function parseAiCoachReply(content: string, weekPlans: PlanDay[]): AiCoachReply {
-  const parsed = extractJson(content);
-  if (!parsed) {
+export function parseAiCoachReply(
+  content: string,
+  weekPlans: PlanDay[],
+): AiCoachReply {
+  const records = collectCoachReplyRecords(content);
+  if (!records.length) {
     return {
       rawText: content,
       message: content,
     };
   }
 
-  const record = normalizeAiCoachRecord(parsed);
-  const message =
-    stringValue(record.message) ||
-    stringValue(record.reply) ||
-    stringValue(record.content) ||
-    "我看完了当前训练记录。";
-  const patchRecord = asRecord(record.planPatch ?? record.patch);
-  const rawChanges =
-    asArray(patchRecord?.changes) ??
-    asArray(patchRecord?.days) ??
-    asArray(record.changes) ??
-    asArray(record.days) ??
-    [];
-  const changes = rawChanges
-    .map((item) => sanitizePatchChange(item, weekPlans))
-    .filter(Boolean) as AiPlanPatch["changes"];
+  for (const record of records) {
+    const patchRecord = coerceJsonRecord(record.planPatch ?? record.patch);
+    const rawChanges =
+      asArray(patchRecord?.changes) ??
+      asArray(patchRecord?.days) ??
+      asArray(record.changes) ??
+      asArray(record.days) ??
+      [];
+    const changes = rawChanges
+      .map((item) => sanitizePatchChange(item, weekPlans))
+      .filter(Boolean) as AiPlanPatch["changes"];
+    if (!changes.length) continue;
 
+    return {
+      rawText: content,
+      message: chooseCoachMessage(record, patchRecord, true),
+      planPatch: {
+        id: `patch-${Date.now()}`,
+        createdAt: new Date().toISOString(),
+        scope:
+          stringValue(patchRecord?.scope ?? record.scope) === "day"
+            ? "day"
+            : changes.length > 1
+              ? "week"
+              : "day",
+        summary:
+          stringValue(patchRecord?.summary ?? record.summary) ||
+          "AI 建议调整训练计划",
+        changes,
+      },
+    };
+  }
+
+  const record = records[0];
   return {
     rawText: content,
-    message,
-    planPatch: changes.length
-      ? {
-          id: `patch-${Date.now()}`,
-          createdAt: new Date().toISOString(),
-          scope:
-            stringValue(patchRecord?.scope ?? record.scope) === "day"
-              ? "day"
-              : changes.length > 1
-                ? "week"
-                : "day",
-          summary:
-            stringValue(patchRecord?.summary ?? record.summary) ||
-            "AI 建议调整训练计划",
-          changes,
-        }
-      : undefined,
+    message: chooseCoachMessage(record, undefined, false),
   };
+}
+
+function collectCoachReplyRecords(input: unknown): Record<string, unknown>[] {
+  const records: Record<string, unknown>[] = [];
+  const seen = new Set<unknown>();
+
+  const visit = (value: unknown) => {
+    if (!value || seen.has(value)) return;
+    seen.add(value);
+    if (typeof value === "string") {
+      const parsed = extractJson(value);
+      if (parsed !== undefined && parsed !== value) visit(parsed);
+      return;
+    }
+    if (Array.isArray(value)) {
+      records.push({ message: "", planPatch: { changes: value } });
+      value.forEach(visit);
+      return;
+    }
+    const record = asRecord(value);
+    if (!record) return;
+    records.push(record);
+
+    const chatCompletionContent = extractChatCompletionContent(record);
+    if (chatCompletionContent) visit(chatCompletionContent);
+
+    visit(record.message);
+    visit(record.rawText);
+    visit(record.content);
+    visit(record.reply);
+    visit(record.planPatch);
+    visit(record.patch);
+  };
+
+  visit(input);
+  return records;
+}
+
+function chooseCoachMessage(
+  record: Record<string, unknown>,
+  patchRecord: Record<string, unknown> | undefined,
+  hasPatch: boolean,
+) {
+  const rawMessage =
+    stringValue(record.message) ||
+    stringValue(record.reply) ||
+    stringValue(record.content);
+  if (rawMessage && !looksLikeJsonPayload(rawMessage)) {
+    return normalizeCoachMessage(rawMessage);
+  }
+  return (
+    normalizeCoachMessage(
+      stringValue(patchRecord?.summary ?? record.summary),
+    ) ||
+    (hasPatch
+      ? "我生成了一版可预览的计划修改，你可以先看一下再决定是否应用。"
+      : "我看完了当前训练记录。")
+  );
+}
+
+function normalizeCoachMessage(value: string) {
+  return value
+    .replace(/([\u4e00-\u9fff])[\r\n]+([\u4e00-\u9fff])/g, "$1$2")
+    .replace(/[ \t]*[\r\n]+[ \t]*/g, " ")
+    .trim();
 }
 
 function normalizeAiCoachRecord(parsed: unknown): Record<string, unknown> {
   if (Array.isArray(parsed)) {
     return { message: "", planPatch: { changes: parsed } };
   }
-  const record = asRecord(parsed) ?? {};
-  const nestedContent = extractNestedJsonRecord(
-    record.content ?? record.message ?? record.reply,
-  );
-  if (nestedContent) {
-    return {
+  let record = asRecord(parsed) ?? {};
+  const chatCompletionContent = extractChatCompletionContent(record);
+  if (chatCompletionContent) {
+    const nested = extractNestedJsonRecord(chatCompletionContent);
+    if (nested) {
+      record = {
+        ...record,
+        ...nested,
+        message: stringValue(nested.message) || chatCompletionContent,
+      };
+    }
+  }
+  for (let index = 0; index < 4; index += 1) {
+    const nestedContent = extractNestedJsonRecord(
+      record.content ?? record.message ?? record.reply,
+    );
+    if (!nestedContent) break;
+    record = {
       ...record,
       ...nestedContent,
       message:
         stringValue(nestedContent.message) ||
-        stringValue(record.message) ||
-        stringValue(record.reply) ||
-        stringValue(record.content),
+        (looksLikeJsonPayload(stringValue(record.message))
+          ? ""
+          : stringValue(record.message)) ||
+        (looksLikeJsonPayload(stringValue(record.reply))
+          ? ""
+          : stringValue(record.reply)) ||
+        (looksLikeJsonPayload(stringValue(record.content))
+          ? ""
+          : stringValue(record.content)),
     };
   }
+  const planPatch = coerceJsonRecord(record.planPatch ?? record.patch);
+  if (planPatch) record = { ...record, planPatch };
   return record;
 }
 
@@ -727,6 +845,28 @@ function extractNestedJsonRecord(value: unknown) {
   if (typeof value !== "string") return undefined;
   const parsed = extractJson(value);
   return asRecord(parsed);
+}
+
+function extractChatCompletionContent(record: Record<string, unknown>) {
+  const choices = asArray(record.choices);
+  const firstChoice = asRecord(choices?.[0]);
+  const message = asRecord(firstChoice?.message);
+  return stringValue(message?.content);
+}
+
+function coerceJsonRecord(value: unknown) {
+  return asRecord(value) ?? extractNestedJsonRecord(value);
+}
+
+function looksLikeJsonPayload(value?: string) {
+  const text = value?.trim();
+  if (!text) return false;
+  return (
+    text.startsWith("{") ||
+    text.startsWith("[") ||
+    text.startsWith("```") ||
+    (text.includes('"planPatch"') && text.includes('"changes"'))
+  );
 }
 
 function sanitizePatchChange(input: unknown, weekPlans: PlanDay[]) {
@@ -739,7 +879,10 @@ function sanitizePatchChange(input: unknown, weekPlans: PlanDay[]) {
     date,
   };
   if (!before) return undefined;
-  const after = sanitizeAiPlanDay(record.after ?? record.plan ?? record, before);
+  const after = sanitizeAiPlanDay(
+    record.after ?? record.plan ?? record,
+    before,
+  );
   if (!after) return undefined;
   return {
     date,
@@ -753,27 +896,165 @@ function extractJson(content: string) {
   const trimmed = content.trim();
   if (!trimmed) return undefined;
 
-  try {
-    return JSON.parse(trimmed);
-  } catch {
-    const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1]?.trim();
-    if (fenced) {
-      try {
-        return JSON.parse(fenced);
-      } catch {
-        // Continue with loose object extraction below.
-      }
-    }
+  const parsedDirect = parseLooseJson(trimmed);
+  if (parsedDirect !== undefined) return parsedDirect;
+
+  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1]?.trim();
+  if (fenced) {
+    const parsedFenced = parseLooseJson(fenced);
+    if (parsedFenced !== undefined) return parsedFenced;
   }
 
   const start = trimmed.indexOf("{");
-  const end = trimmed.lastIndexOf("}");
-  if (start < 0 || end <= start) return undefined;
-  try {
-    return JSON.parse(trimmed.slice(start, end + 1));
-  } catch {
-    return undefined;
+  if (start < 0) return undefined;
+
+  const balanced = findFirstBalancedJsonObject(trimmed, start);
+  if (balanced) {
+    const parsedBalanced = parseLooseJson(balanced);
+    if (parsedBalanced !== undefined) return parsedBalanced;
   }
+
+  const end = trimmed.lastIndexOf("}");
+  if (end <= start) return undefined;
+  return parseLooseJson(trimmed.slice(start, end + 1));
+}
+
+function findFirstBalancedJsonObject(text: string, start: number) {
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (let index = start; index < text.length; index += 1) {
+    const char = text[index];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (char === "\\") {
+        escaped = true;
+        continue;
+      }
+      if (char === '"') inString = false;
+      continue;
+    }
+
+    if (char === '"') {
+      inString = true;
+      continue;
+    }
+    if (char === "{") depth += 1;
+    if (char === "}") {
+      depth -= 1;
+      if (depth === 0) return text.slice(start, index + 1);
+    }
+  }
+
+  return undefined;
+}
+
+function parseLooseJson(text: string) {
+  for (const candidate of buildJsonParseCandidates(text)) {
+    try {
+      return unwrapJsonValue(JSON.parse(candidate));
+    } catch {
+      try {
+        return unwrapJsonValue(JSON.parse(escapeJsonStringControls(candidate)));
+      } catch {
+        // Try the next representation. Some OpenAI-compatible relays return a
+        // JSON object as a bare escaped string, for example {\"message\":...}.
+      }
+    }
+  }
+  return undefined;
+}
+
+function buildJsonParseCandidates(text: string) {
+  const candidates = [text];
+  for (const escaped of repairBareEscapedJsonCandidates(text)) {
+    if (escaped && !candidates.includes(escaped)) candidates.push(escaped);
+  }
+  return candidates;
+}
+
+function repairBareEscapedJsonCandidates(text: string) {
+  const trimmed = text.trim();
+  const candidates: string[] = [];
+  if (!/[\\"]/.test(trimmed)) return candidates;
+
+  const unquoted = trimmed.match(/^"([\s\S]*)"$/)?.[1];
+  if (unquoted) candidates.push(unquoted);
+
+  let repaired = unquoted ?? trimmed;
+  for (let index = 0; index < 3; index += 1) {
+    const next = repaired
+      .replace(/^\\+([{\[])/, "$1")
+      .replace(/([}\]])\\+$/, "$1")
+      .replace(/\\+"/g, '"');
+    if (next === repaired) break;
+    repaired = next;
+    candidates.push(repaired);
+  }
+
+  return candidates;
+}
+
+function escapeJsonStringControls(text: string) {
+  let inString = false;
+  let escaped = false;
+  let repaired = "";
+
+  for (const char of text) {
+    if (!inString) {
+      repaired += char;
+      if (char === '"') inString = true;
+      continue;
+    }
+    if (escaped) {
+      repaired += char;
+      escaped = false;
+      continue;
+    }
+    if (char === "\\") {
+      repaired += char;
+      escaped = true;
+      continue;
+    }
+    if (char === '"') {
+      repaired += char;
+      inString = false;
+      continue;
+    }
+    if (char === "\n") {
+      repaired += "\\n";
+      continue;
+    }
+    if (char === "\r") {
+      repaired += "\\r";
+      continue;
+    }
+    if (char === "\t") {
+      repaired += "\\t";
+      continue;
+    }
+    repaired += char;
+  }
+  return repaired;
+}
+
+function unwrapJsonValue(value: unknown): unknown {
+  let current = value;
+  for (let index = 0; index < 4; index += 1) {
+    if (typeof current !== "string") return current;
+    const text = current.trim();
+    if (!looksLikeJsonPayload(text)) return current;
+    try {
+      current = JSON.parse(text);
+    } catch {
+      return current;
+    }
+  }
+  return current;
 }
 
 function findAiDay(days: unknown[], date: string, index: number) {
@@ -784,7 +1065,10 @@ function findAiDay(days: unknown[], date: string, index: number) {
   return exact ?? days[index];
 }
 
-function sanitizeAiPlanDay(input: unknown, basePlan: PlanDay): PlanDay | undefined {
+function sanitizeAiPlanDay(
+  input: unknown,
+  basePlan: PlanDay,
+): PlanDay | undefined {
   const record = asRecord(input);
   if (!record) return undefined;
   const exercises = normalizeExercises(record.exercises);
@@ -816,12 +1100,16 @@ function sanitizeAiPlanDay(input: unknown, basePlan: PlanDay): PlanDay | undefin
   };
   return {
     ...plan,
-    segments: plan.segments?.length ? plan.segments : buildDefaultSegmentsForPlan(plan),
+    segments: plan.segments?.length
+      ? plan.segments
+      : buildDefaultSegmentsForPlan(plan),
   };
 }
 
 function normalizeTrainingKind(value: unknown): TrainingKind | undefined {
-  const text = String(value ?? "").toLowerCase().trim();
+  const text = String(value ?? "")
+    .toLowerCase()
+    .trim();
   const map: Record<string, TrainingKind> = {
     recovery: "recovery",
     z1: "recovery",
@@ -972,25 +1260,31 @@ function buildActivityAnalysis(
   const actualSeconds = sum(activities, (activity) =>
     Number(activity.moving_time ?? activity.elapsed_time ?? 0),
   );
-  const actualMinutes = actualSeconds ? Math.round(actualSeconds / 60) : undefined;
+  const actualMinutes = actualSeconds
+    ? Math.round(actualSeconds / 60)
+    : undefined;
   const weightedPower = weightedAverage(
     activities,
     (activity) => Number(activity.average_watts ?? activity.avg_watts ?? 0),
     (activity) => Number(activity.moving_time ?? activity.elapsed_time ?? 0),
   );
-  const distanceMeters = sum(activities, (activity) => Number(activity.distance ?? 0));
+  const distanceMeters = sum(activities, (activity) =>
+    Number(activity.distance ?? 0),
+  );
   const trainingLoad = sum(activities, (activity) =>
     Number(activity.icu_training_load ?? activity.training_load ?? 0),
   );
   const targetPower = plan.powerRange
     ? (plan.powerRange[0] + plan.powerRange[1]) / 2
     : undefined;
-  const durationDiff = plannedMinutes && actualMinutes
-    ? Math.abs(actualMinutes - plannedMinutes) / plannedMinutes
-    : 0;
-  const powerDiff = targetPower && weightedPower
-    ? Math.abs(weightedPower - targetPower) / targetPower
-    : 0;
+  const durationDiff =
+    plannedMinutes && actualMinutes
+      ? Math.abs(actualMinutes - plannedMinutes) / plannedMinutes
+      : 0;
+  const powerDiff =
+    targetPower && weightedPower
+      ? Math.abs(weightedPower - targetPower) / targetPower
+      : 0;
   const differencePercent = Math.min(
     100,
     Math.round((durationDiff * 0.55 + powerDiff * 0.45) * 100),
@@ -1017,11 +1311,17 @@ function buildActivityAnalysis(
     plannedPowerRange: plan.powerRange,
     actualMinutes,
     averagePower: weightedPower ? Math.round(weightedPower) : undefined,
-    distanceKm: distanceMeters ? Number((distanceMeters / 1000).toFixed(1)) : undefined,
+    distanceKm: distanceMeters
+      ? Number((distanceMeters / 1000).toFixed(1))
+      : undefined,
     trainingLoad: trainingLoad ? Math.round(trainingLoad) : undefined,
     differencePercent,
     summary,
-    suggestion: buildDifferenceSuggestion(differencePercent, plannedMinutes, actualMinutes),
+    suggestion: buildDifferenceSuggestion(
+      differencePercent,
+      plannedMinutes,
+      actualMinutes,
+    ),
   };
 }
 
@@ -1030,7 +1330,8 @@ function buildDifferenceSuggestion(
   plannedMinutes?: number,
   actualMinutes?: number,
 ) {
-  if (!actualMinutes) return "没有活动数据，先确认当天是否已同步到 Intervals.icu。";
+  if (!actualMinutes)
+    return "没有活动数据，先确认当天是否已同步到 Intervals.icu。";
   if (differencePercent <= 12) return "执行和计划很接近，可以按原计划继续。";
   if (plannedMinutes && actualMinutes > plannedMinutes * 1.25) {
     return "实际量明显偏高，下一次训练建议保守一点，优先恢复。";
