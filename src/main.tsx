@@ -1913,16 +1913,6 @@ function PowerRangePickerField({
         <strong className={value ? "" : "placeholder"}>{display}</strong>
         <em>选择</em>
       </button>
-      {value && (
-        <button
-          type="button"
-          className="power-range-clear"
-          aria-label="清空功率区间"
-          onClick={() => onChange(undefined)}
-        >
-          清空
-        </button>
-      )}
       <Popup
         visible={open}
         placement="bottom"
@@ -1933,9 +1923,12 @@ function PowerRangePickerField({
           title="选择功率区间"
           columns={[POWER_WATT_OPTIONS, POWER_WATT_OPTIONS]}
           value={[String(lower), String(Math.max(lower, upper))]}
-          cancelBtn="取消"
+          cancelBtn={value ? "清空" : false}
           confirmBtn="确定"
-          onCancel={() => setOpen(false)}
+          onCancel={() => {
+            onChange(undefined);
+            setOpen(false);
+          }}
           onConfirm={(nextValue) => {
             const first = Number(nextValue[0]);
             const second = Number(nextValue[1]);
@@ -3427,22 +3420,19 @@ function LocalDataSize({
         <span>本地数据量</span>
         <strong>{formatBytes(bytes)}</strong>
       </div>
-      <div className="data-size-list">
+      <div className="data-size-grid">
         {rows.map((row) => (
-          <div key={row.key}>
+          <button
+            type="button"
+            key={row.key}
+            disabled={row.count === 0}
+            onClick={() => onClearItem(row.key)}
+            title={`清理${DATA_CLEAR_LABELS[row.key]}`}
+          >
             <span>{DATA_CLEAR_LABELS[row.key]}</span>
             <strong>{row.count}</strong>
             <em>{row.hint}</em>
-            <Button
-              size="small"
-              shape="round"
-              variant="outline"
-              disabled={row.count === 0}
-              onClick={() => onClearItem(row.key)}
-            >
-              清理
-            </Button>
-          </div>
+          </button>
         ))}
       </div>
       <p>按当前可导出的 JSON 快照估算，浏览器实际占用会略有差异。</p>
