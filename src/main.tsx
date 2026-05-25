@@ -2,6 +2,14 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { toPng } from "html-to-image";
 import {
+  ComposedChart,
+  ReferenceArea,
+  ReferenceLine,
+  ResponsiveContainer,
+  XAxis,
+  YAxis,
+} from "recharts";
+import {
   Button,
   Dialog,
   Input,
@@ -735,6 +743,9 @@ function TodayPage({
             />
           </div>
         ) : null}
+        {plan.segments?.length ? (
+          <PowerDistribution segments={plan.segments} ftp={settings.ftp} />
+        ) : null}
         {plan.rideDetails && <p className="note">{plan.rideDetails}</p>}
         {plan.exercises && <StrengthList plan={plan} />}
         {plan.notes && <p className="note">{plan.notes}</p>}
@@ -864,6 +875,155 @@ function ReadinessPanel({ insight }: { insight: ReadinessInsight }) {
       )}
     </div>
   );
+}
+
+type DistributionBlock = {
+  key: string;
+  name: string;
+  minutes: number;
+  range?: [number, number];
+  kind: string;
+  start: number;
+  end: number;
+  power: number;
+};
+
+function PowerDistribution({
+  segments,
+  ftp,
+}: {
+  segments: PlanSegment[];
+  ftp: number;
+}) {
+  const blocks = buildDistributionBlocks(segments, ftp);
+  const totalMinutes = blocks.reduce((sum, block) => sum + block.minutes, 0);
+  if (!blocks.length || totalMinutes <= 0) return null;
+  const maxPower = Math.max(settingsFtpLine(ftp), ...blocks.map((block) => block.power));
+
+  return (
+    <div className="power-distribution" aria-label={`计划功率轮廓，${totalMinutes}分钟`}>
+      <div className="power-profile-chart recharts-power-profile">
+        <ResponsiveContainer width="100%" height={68}>
+          <ComposedChart
+            data={[
+              { minute: 0, power: 0 },
+              { minute: totalMinutes, power: maxPower },
+            ]}
+            margin={{ top: 4, right: 0, bottom: 0, left: 0 }}
+          >
+            <XAxis
+              dataKey="minute"
+              type="number"
+              domain={[0, totalMinutes]}
+              hide
+            />
+            <YAxis type="number" domain={[0, Math.ceil(maxPower * 1.08)]} hide />
+            <ReferenceLine
+              y={settingsFtpLine(ftp)}
+              stroke="rgba(85, 100, 96, 0.42)"
+              strokeDasharray="3 4"
+              ifOverflow="extendDomain"
+            />
+            {blocks.map((block) => (
+              <ReferenceArea
+                key={block.key}
+                x1={block.start}
+                x2={block.end}
+                y1={0}
+                y2={block.power}
+                fill={powerBlockColor(block.kind)}
+                fillOpacity={0.86}
+                stroke={powerBlockStroke(block.kind)}
+                strokeOpacity={0.9}
+              />
+            ))}
+          </ComposedChart>
+        </ResponsiveContainer>
+      </div>
+    </div>
+  );
+}
+
+function buildDistributionBlocks(segments: PlanSegment[], ftp: number) {
+  let cursor = 0;
+  return segments.flatMap((segment, segmentIndex) => {
+    const repeat = Math.max(1, Math.round(segment.repeat ?? 1));
+    const workMinutes = Math.max(0, Math.round(segment.durationMinutes ?? 0));
+    const recoveryMinutes = Math.max(0, Math.round(segment.recoveryMinutes ?? 0));
+    const blocks: DistributionBlock[] = [];
+    for (let index = 0; index < repeat; index += 1) {
+      if (workMinutes > 0) {
+        const start = cursor;
+        const end = cursor + workMinutes;
+        blocks.push({
+          key: `${segmentIndex}-${index}-work`,
+          name: segment.name,
+          minutes: workMinutes,
+          range: segment.targetPowerRange,
+          kind: labelPowerBlockKind(segment.targetPowerRange, ftp),
+          start,
+          end,
+          power: averagePowerForRange(segment.targetPowerRange, ftp),
+        });
+        cursor = end;
+      }
+      if (recoveryMinutes > 0) {
+        const start = cursor;
+        const end = cursor + recoveryMinutes;
+        blocks.push({
+          key: `${segmentIndex}-${index}-recovery`,
+          name: "恢复",
+          minutes: recoveryMinutes,
+          range: segment.recoveryPowerRange,
+          kind: labelPowerBlockKind(segment.recoveryPowerRange, ftp),
+          start,
+          end,
+          power: averagePowerForRange(segment.recoveryPowerRange, ftp),
+        });
+        cursor = end;
+      }
+    }
+    return blocks;
+  });
+}
+
+function labelPowerBlockKind(range: [number, number] | undefined, ftp: number) {
+  if (!range || !ftp) return "pd-z2";
+  const ratio = ((range[0] + range[1]) / 2) / ftp;
+  if (ratio < 0.62) return "pd-recovery";
+  if (ratio < 0.78) return "pd-z2";
+  if (ratio < 0.88) return "pd-tempo";
+  if (ratio < 0.95) return "pd-sweet";
+  return "pd-threshold";
+}
+
+function averagePowerForRange(range: [number, number] | undefined, ftp: number) {
+  if (!range) return Math.round(ftp * 0.55);
+  return Math.round((range[0] + range[1]) / 2);
+}
+
+function settingsFtpLine(ftp: number) {
+  return Math.max(1, Math.round(ftp * 0.9));
+}
+
+function powerBlockColor(kind: string) {
+  return {
+    "pd-recovery": "#78b8a9",
+    "pd-z2": "#75b85c",
+    "pd-tempo": "#c8ba61",
+    "pd-sweet": "#d87083",
+    "pd-threshold": "#df5f79",
+  }[kind] ?? "#75b85c";
+}
+
+function powerBlockStroke(kind: string) {
+  return {
+    "pd-recovery": "#4f9587",
+    "pd-z2": "#579941",
+    "pd-tempo": "#a9943c",
+    "pd-sweet": "#b84f66",
+    "pd-threshold": "#bf415e",
+  }[kind] ?? "#579941";
 }
 
 function WeeklyReview({
@@ -1004,6 +1164,8 @@ type MonthlyReportStats = {
     hard: boolean;
   }>;
   bodyTrend: string;
+  weightDeltaValue: string;
+  weightDeltaUnit: string;
   summary: string;
 };
 
@@ -1069,7 +1231,9 @@ function MonthlyReport({
       link.download = `cycling-monthly-report-${stats.month}.png`;
       link.click();
     } catch (error) {
-      setSaveError(error instanceof Error ? error.message : "生成图片失败，请重试。");
+      setSaveError(
+        error instanceof Error ? error.message : "生成图片失败，请重试。",
+      );
     } finally {
       setSaving(false);
     }
@@ -1085,7 +1249,10 @@ function MonthlyReport({
         <p className="monthly-summary">{stats.summary}</p>
         <div className="monthly-metrics">
           <Metric label="训练次数" value={`${stats.trainingCount} 次`} />
-          <Metric label="骑行公里" value={`${stats.distanceKm.toFixed(1)} km`} />
+          <Metric
+            label="骑行公里"
+            value={`${stats.distanceKm.toFixed(1)} km`}
+          />
           <Metric label="总时长" value={formatDuration(stats.actualMinutes)} />
           <Metric label="本月 TSS" value={String(stats.totalTss)} />
         </div>
@@ -1110,7 +1277,9 @@ function MonthlyReport({
               size="small"
               variant="outline"
               shape="round"
-              onClick={() => setMonthAnchor((current) => addMonths(current, -1))}
+              onClick={() =>
+                setMonthAnchor((current) => addMonths(current, -1))
+              }
             >
               上月
             </Button>
@@ -1134,22 +1303,49 @@ function MonthlyReport({
           </div>
           <label className="monthly-body-switch">
             <span>在图片中显示身体趋势</span>
-            <Switch size="small" value={includeBody} onChange={(value) => setIncludeBody(Boolean(value))} />
+            <Switch
+              size="small"
+              value={includeBody}
+              onChange={(value) => setIncludeBody(Boolean(value))}
+            />
           </label>
           <div className="monthly-card-stage">
             <div className="monthly-share-card" ref={cardRef}>
-              <div className="monthly-card-brand">WK SPORT / MONTHLY REPORT</div>
               <h2>{stats.monthLabel} 骑行训练月报</h2>
-              <p className="monthly-card-goal">减脂 + 提升功率 · FTP {settings.ftp}W</p>
+              <p className="monthly-card-goal">
+                减脂 + 提升功率 · FTP {settings.ftp}W
+              </p>
               <div className="monthly-card-hero">
                 <strong>{stats.distanceKm.toFixed(1)}</strong>
                 <span>本月骑行公里</span>
               </div>
               <div className="monthly-card-grid">
-                <div><strong>{stats.trainingCount}</strong><span>训练次数</span></div>
-                <div><strong>{formatDuration(stats.actualMinutes)}</strong><span>训练时长</span></div>
-                <div><strong>{stats.totalTss}</strong><span>训练负荷 TSS</span></div>
-                <div><strong>{stats.completionRate}%</strong><span>计划完成率</span></div>
+                <ReportMetricValue
+                  value={stats.trainingCount}
+                  unit="次"
+                  label="训练次数"
+                />
+                <ReportMetricValue
+                  value={formatDurationParts(stats.actualMinutes).value}
+                  unit={formatDurationParts(stats.actualMinutes).unit}
+                  label="训练时长"
+                />
+                <ReportMetricValue
+                  value={stats.totalTss}
+                  label="训练负荷 TSS"
+                />
+                <ReportMetricValue
+                  value={stats.completionRate}
+                  unit="%"
+                  label="计划完成率"
+                />
+                {includeBody && (
+                  <ReportMetricValue
+                    value={stats.weightDeltaValue}
+                    unit={stats.weightDeltaUnit}
+                    label="体重变化"
+                  />
+                )}
               </div>
               <div className="monthly-calendar">
                 {stats.calendarDays.map((day) => (
@@ -1161,22 +1357,42 @@ function MonthlyReport({
                   </span>
                 ))}
               </div>
-              <div className="monthly-highlights">
-                <span>最长骑行 {stats.longestDistanceKm.toFixed(1)} km / {formatDuration(stats.longestMinutes)}</span>
-                <span>力量训练 {stats.strengthCount} 次</span>
-                {includeBody && <span>{stats.bodyTrend}</span>}
-              </div>
-              <p className="monthly-card-comment">{stats.summary}</p>
-              <footer>Generated by wk-sport-app · 数据保存在本地</footer>
+              <footer>Generated by wk-sport-app </footer>
             </div>
           </div>
           {saveError && <p className="sync-error">{saveError}</p>}
-          <Button block shape="round" theme="primary" loading={saving} onClick={saveShareCard}>
+          <Button
+            block
+            shape="round"
+            theme="primary"
+            loading={saving}
+            onClick={saveShareCard}
+          >
             保存 9:16 图片
           </Button>
         </div>
       </Popup>
     </>
+  );
+}
+
+function ReportMetricValue({
+  value,
+  unit,
+  label,
+}: {
+  value: string | number;
+  unit?: string;
+  label: string;
+}) {
+  return (
+    <div>
+      <strong>
+        {value}
+        {unit && <small>{unit}</small>}
+      </strong>
+      <span>{label}</span>
+    </div>
   );
 }
 
@@ -1855,6 +2071,7 @@ function PlanPage({
         );
         const log = trainingLogs[key] ?? { date: key };
         const expanded = Boolean(expandedDates[key]);
+        const isDone = Boolean(checkins[key]?.trainingDone);
         return (
           <article
             className={`panel plan-editor ${expanded ? "expanded" : "collapsed"}`}
@@ -1871,16 +2088,16 @@ function PlanPage({
                 <Button
                   size="small"
                   shape="round"
-                  theme={checkins[key]?.trainingDone ? "primary" : "default"}
-                  variant={checkins[key]?.trainingDone ? "base" : "outline"}
-                  className={checkins[key]?.trainingDone ? "done" : ""}
+                  theme={isDone ? "primary" : "default"}
+                  variant={isDone ? "base" : "outline"}
+                  className={isDone ? "done" : ""}
                   onClick={() =>
-                    onTrainingDone(key, !checkins[key]?.trainingDone)
+                    onTrainingDone(key, !isDone)
                   }
-                  aria-pressed={Boolean(checkins[key]?.trainingDone)}
+                  aria-pressed={isDone}
                   icon={<Check size={15} />}
                 >
-                  {checkins[key]?.trainingDone ? "已完成" : "未完成"}
+                  {isDone ? "已完成" : "未完成"}
                 </Button>
                 <Button
                   size="small"
@@ -1990,11 +2207,13 @@ function PlanPage({
                 {plan.nutrition && (
                   <p className="nutrition-note">{plan.nutrition}</p>
                 )}
-                <TrainingLogEditor
-                  log={log}
-                  onChange={(patch) => onTrainingLogChange(key, patch)}
-                />
               </div>
+            )}
+            {isDone && (
+              <TrainingLogEditor
+                log={log}
+                onChange={(patch) => onTrainingLogChange(key, patch)}
+              />
             )}
           </article>
         );
@@ -4186,7 +4405,11 @@ function buildMonthlyReportStats({
   templates: TrainingTemplate[];
 }): MonthlyReportStats {
   const start = new Date(monthAnchor.getFullYear(), monthAnchor.getMonth(), 1);
-  const end = new Date(monthAnchor.getFullYear(), monthAnchor.getMonth() + 1, 0);
+  const end = new Date(
+    monthAnchor.getFullYear(),
+    monthAnchor.getMonth() + 1,
+    0,
+  );
   const month = `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, "0")}`;
   const keys = Array.from({ length: end.getDate() }, (_, index) =>
     dateKey(new Date(start.getFullYear(), start.getMonth(), index + 1)),
@@ -4206,8 +4429,8 @@ function buildMonthlyReportStats({
       analysis?.trainingLoad ?? estimatePlannedTssFromLog(plan, actualMinutes);
     const trained = Boolean(
       checkins[key]?.trainingDone ||
-        actualMinutes ||
-        (analysis?.activityCount ?? 0) > 0,
+      actualMinutes ||
+      (analysis?.activityCount ?? 0) > 0,
     );
     return {
       date: key,
@@ -4220,7 +4443,9 @@ function buildMonthlyReportStats({
       hard: trained && (plan.kind === "sweetspot" || plan.kind === "threshold"),
     };
   });
-  const plannedTrainingDays = rows.filter((row) => row.plan.kind !== "rest").length;
+  const plannedTrainingDays = rows.filter(
+    (row) => row.plan.kind !== "rest",
+  ).length;
   const trainedRows = rows.filter((row) => row.trained);
   const trainingCount = trainedRows.length;
   const rideCount = rows.reduce(
@@ -4254,7 +4479,7 @@ function buildMonthlyReportStats({
   const completionRate = plannedTrainingDays
     ? Math.round((trainingCount / plannedTrainingDays) * 100)
     : 0;
-  const bodyTrend = buildMonthlyBodyTrend(bodyEntries, month);
+  const bodyTrend = buildMonthlyBodyTrend(bodyEntries, month, dateKey(end));
 
   return {
     month,
@@ -4281,7 +4506,9 @@ function buildMonthlyReportStats({
       trained: row.trained,
       hard: row.hard,
     })),
-    bodyTrend,
+    bodyTrend: bodyTrend.text,
+    weightDeltaValue: bodyTrend.weightDeltaValue,
+    weightDeltaUnit: bodyTrend.weightDeltaUnit,
     summary: buildMonthlySummary({
       trainingCount,
       rideCount,
@@ -4311,28 +4538,61 @@ function estimatePlannedTssFromLog(plan: PlanDay, actualMinutes: number) {
 function buildMonthlyBodyTrend(
   bodyEntries: Record<string, BodyEntry>,
   month: string,
+  monthEnd: string,
 ) {
-  const entries = Object.values(bodyEntries)
-    .filter((entry) => entry.date.startsWith(month))
+  const entries = Object.entries(bodyEntries)
+    .map(([key, entry]) => ({
+      ...entry,
+      date: entry.date || key,
+    }))
+    .filter((entry) => entry.date <= monthEnd)
     .sort((a, b) => a.date.localeCompare(b.date));
-  const weightValues = entries
-    .map((entry) => positiveNumber(entry.weightKg))
-    .filter((value): value is number => Boolean(value));
-  const waistValues = entries
-    .map((entry) => positiveNumber(entry.waistCm))
-    .filter((value): value is number => Boolean(value));
+  const monthEntries = entries.filter((entry) => entry.date.startsWith(month));
+  const monthlyWeightPoints = buildBodyPoints(monthEntries, "weightKg");
+  const allWeightPoints = buildBodyPoints(entries, "weightKg");
+  const monthlyWaistPoints = buildBodyPoints(monthEntries, "waistCm");
   const parts = [];
-  if (weightValues.length >= 2) {
-    parts.push(`体重 ${formatDelta(weightValues.at(-1)! - weightValues[0])}kg`);
-  } else if (weightValues.length === 1) {
-    parts.push(`体重 ${weightValues[0]}kg（本月仅1条）`);
+  let weightDeltaValue = "-";
+  let weightDeltaUnit = "";
+  if (monthlyWeightPoints.length >= 2) {
+    const first = monthlyWeightPoints[0];
+    const last = monthlyWeightPoints.at(-1)!;
+    weightDeltaValue = formatDelta(last.value - first.value);
+    weightDeltaUnit = "kg";
+    parts.push(`本月体重 ${weightDeltaValue}${weightDeltaUnit}`);
+  } else if (allWeightPoints.length >= 2) {
+    const latestTwo = allWeightPoints.slice(-2);
+    weightDeltaValue = formatDelta(latestTwo[1].value - latestTwo[0].value);
+    weightDeltaUnit = "kg";
+    parts.push(`最近体重 ${weightDeltaValue}${weightDeltaUnit}`);
+  } else if (allWeightPoints.length === 1) {
+    weightDeltaValue = String(allWeightPoints[0].value);
+    weightDeltaUnit = "kg";
+    parts.push(`体重 ${weightDeltaValue}${weightDeltaUnit}（仅1条）`);
   } else {
     parts.push("体重暂无记录");
   }
-  if (waistValues.length >= 2) {
-    parts.push(`腰围 ${formatDelta(waistValues.at(-1)! - waistValues[0])}cm`);
+  if (monthlyWaistPoints.length >= 2) {
+    const first = monthlyWaistPoints[0];
+    const last = monthlyWaistPoints.at(-1)!;
+    parts.push(`腰围 ${formatDelta(last.value - first.value)}cm`);
   }
-  return parts.join(" / ");
+  return {
+    text: parts.join(" / "),
+    weightDeltaValue,
+    weightDeltaUnit,
+  };
+}
+
+function buildBodyPoints(entries: BodyEntry[], key: "weightKg" | "waistCm") {
+  return entries
+    .map((entry) => ({
+      date: entry.date,
+      value: positiveNumber(entry[key]),
+    }))
+    .filter((point): point is { date: string; value: number } =>
+      Boolean(point.value),
+    );
 }
 
 function buildMonthlySummary({
@@ -4352,7 +4612,8 @@ function buildMonthlySummary({
   if (!trainingCount) {
     return "这个月还没有可统计的训练记录，先完成几次训练再生成更有内容的月报。";
   }
-  const distanceText = distanceKm > 0 ? `骑行 ${distanceKm.toFixed(1)} km，` : "";
+  const distanceText =
+    distanceKm > 0 ? `骑行 ${distanceKm.toFixed(1)} km，` : "";
   const loadText = totalTss ? `累计 TSS ${totalTss}，` : "";
   return `这个月完成 ${trainingCount} 天训练，${rideCount} 次骑行，${distanceText}${loadText}计划完成率 ${completionRate}%。稳住节奏，比单次爆发更重要。`;
 }
@@ -4363,6 +4624,15 @@ function formatDuration(minutes: number) {
   const rest = minutes % 60;
   if (!hours) return `${rest} 分钟`;
   return rest ? `${hours}小时${rest}分` : `${hours}小时`;
+}
+
+function formatDurationParts(minutes: number) {
+  if (!minutes) return { value: "0", unit: "分钟" };
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  if (!hours) return { value: String(rest), unit: "分钟" };
+  if (!rest) return { value: String(hours), unit: "小时" };
+  return { value: `${hours}:${String(rest).padStart(2, "0")}`, unit: "小时" };
 }
 
 function formatDelta(value: number) {

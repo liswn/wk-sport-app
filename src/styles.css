@@ -411,6 +411,29 @@ h3 {
   padding-left: 10px;
 }
 
+.power-distribution {
+  margin-top: 14px;
+  padding: 0 2px;
+}
+
+.power-profile-chart {
+  height: 68px;
+  overflow: hidden;
+  border-bottom: 1px solid rgba(85, 100, 96, 0.18);
+  border-radius: 8px 8px 0 0;
+  background: repeating-linear-gradient(
+    to bottom,
+    transparent 0,
+    transparent 18px,
+    rgba(85, 100, 96, 0.26) 19px,
+    transparent 20px
+  );
+}
+
+.recharts-power-profile svg {
+  overflow: visible;
+}
+
 .muted-note {
   margin: 0;
   border: 1px solid rgba(132, 151, 142, 0.16);
@@ -532,7 +555,11 @@ h3 {
   overscroll-behavior: contain;
   padding: 14px 14px calc(env(safe-area-inset-bottom) + 16px);
   background:
-    linear-gradient(180deg, rgba(248, 250, 247, 0.96), rgba(238, 244, 240, 0.96)),
+    linear-gradient(
+      180deg,
+      rgba(248, 250, 247, 0.96),
+      rgba(238, 244, 240, 0.96)
+    ),
     #f4f7f3;
 }
 
@@ -571,40 +598,53 @@ h3 {
   font-weight: 700;
 }
 
+.monthly-body-preview {
+  margin: -4px 0 0;
+  border: 1px solid rgba(44, 122, 123, 0.16);
+  border-radius: 12px;
+  padding: 9px 11px;
+  background: rgba(237, 246, 245, 0.58);
+  color: #1f6668;
+  font-size: 12px;
+  font-weight: 750;
+  line-height: 1.45;
+}
+
 .monthly-card-stage {
-  display: grid;
-  justify-items: center;
   overflow: auto;
   border-radius: 18px;
   padding: 12px;
   background: rgba(255, 255, 255, 0.42);
+  padding-bottom: 20px;
 }
 
 .monthly-share-card {
+  position: relative;
   display: grid;
   width: min(100%, 340px);
   aspect-ratio: 9 / 16;
   align-content: start;
-  gap: 14px;
+  gap: 12px;
   overflow: hidden;
   border: 1px solid rgba(255, 255, 255, 0.82);
   border-radius: 28px;
   padding: 24px 22px;
   background:
-    radial-gradient(circle at 88% 8%, rgba(255, 242, 220, 0.82), transparent 26%),
-    radial-gradient(circle at 10% 18%, rgba(221, 244, 232, 0.9), transparent 28%),
+    radial-gradient(
+      circle at 88% 8%,
+      rgba(255, 242, 220, 0.82),
+      transparent 26%
+    ),
+    radial-gradient(
+      circle at 10% 18%,
+      rgba(221, 244, 232, 0.9),
+      transparent 28%
+    ),
     linear-gradient(155deg, #fbfcf8 0%, #eef6f2 48%, #f7f1e7 100%);
   color: #1f2b27;
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.88),
     0 18px 44px rgba(30, 45, 40, 0.16);
-}
-
-.monthly-card-brand {
-  color: #5f716b;
-  font-size: 10px;
-  font-weight: 850;
-  letter-spacing: 0.08em;
 }
 
 .monthly-share-card h2 {
@@ -624,18 +664,19 @@ h3 {
   display: grid;
   justify-items: start;
   border-radius: 22px;
-  padding: 18px;
+  padding: 15px 16px;
   background: rgba(255, 255, 255, 0.58);
 }
 
 .monthly-card-hero strong {
   color: #1f6668;
-  font-size: 54px;
+  font-size: 50px;
   line-height: 0.95;
 }
 
 .monthly-card-hero span,
 .monthly-card-grid span,
+.monthly-body-card span,
 .monthly-highlights span,
 .monthly-share-card footer {
   color: #60716b;
@@ -645,8 +686,8 @@ h3 {
 
 .monthly-card-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 7px;
 }
 
 .monthly-card-grid div {
@@ -654,22 +695,33 @@ h3 {
   gap: 4px;
   border: 1px solid rgba(132, 151, 142, 0.16);
   border-radius: 16px;
-  padding: 11px;
+  padding: 8px 9px;
   background: rgba(255, 255, 255, 0.46);
 }
 
 .monthly-card-grid strong {
+  display: block;
+  overflow: hidden;
   color: #24312d;
-  font-size: 20px;
+  font-size: 18px;
   line-height: 1.1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.monthly-card-grid strong small {
+  margin-left: 1px;
+  color: #60716b;
+  font-size: 10px;
+  font-weight: 850;
 }
 
 .monthly-calendar {
   display: grid;
   grid-template-columns: repeat(7, 1fr);
-  gap: 6px;
-  border-radius: 18px;
-  padding: 12px;
+  gap: 5px;
+  border-radius: 16px;
+  padding: 10px;
   background: rgba(255, 255, 255, 0.44);
 }
 
@@ -704,21 +756,25 @@ h3 {
 
 .monthly-highlights span {
   border-radius: 999px;
-  padding: 7px 10px;
+  padding: 6px 9px;
   background: rgba(255, 255, 255, 0.48);
 }
 
 .monthly-card-comment {
   margin: 0;
   color: #34433e;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 700;
-  line-height: 1.55;
+  line-height: 1.45;
 }
 
 .monthly-share-card footer {
-  margin-top: auto;
+  position: absolute;
+  bottom: 10px;
+  left: 0;
+  right: 0;
   opacity: 0.82;
+  text-align: center;
 }
 
 .backup-status {
@@ -1315,6 +1371,36 @@ h3 {
   margin: 0 12px;
 }
 
+.actual-summary {
+  display: grid;
+  gap: 5px;
+  margin: 0 12px;
+  border: 1px solid rgba(44, 122, 123, 0.18);
+  border-radius: 12px;
+  padding: 10px 11px;
+  background: rgba(237, 246, 245, 0.58);
+}
+
+.actual-summary span {
+  color: #1f6668;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.actual-summary strong {
+  color: #22312b;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.actual-summary p {
+  margin: 0;
+  color: #5c6964;
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
 .plan-expand-button svg {
   transition: transform 160ms ease;
 }
@@ -1327,7 +1413,7 @@ h3 {
   display: grid;
   gap: 12px;
   border-top: 1px solid rgba(132, 151, 142, 0.18);
-  padding-top: 12px;
+  padding: 12px;
 }
 
 .actual-log h4 {
