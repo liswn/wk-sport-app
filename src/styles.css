@@ -138,7 +138,6 @@ h2 {
 }
 
 h3 {
-  margin-bottom: 12px;
   font-size: 17px;
   line-height: 1.2;
   letter-spacing: 0;
@@ -177,7 +176,7 @@ h3 {
 }
 
 .today-page {
-  padding-bottom: 134px;
+  padding-bottom: 34px;
 }
 
 .panel,
@@ -207,6 +206,108 @@ h3 {
       rgba(245, 250, 246, 0.58)
     ),
     var(--content-surface-strong);
+}
+
+.readiness-panel {
+  display: grid;
+  gap: 12px;
+  overflow: hidden;
+}
+
+.readiness-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.readiness-head span,
+.readiness-actions span,
+.readiness-diff span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.readiness-head h3 {
+  margin: 2px 0 0;
+  font-size: 20px;
+}
+
+.readiness-head > strong {
+  display: inline-flex;
+  width: 56px;
+  height: 56px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  font-size: 14px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72);
+}
+
+.readiness-panel > p,
+.readiness-diff p {
+  margin: 0;
+  color: #43514c;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.readiness-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.readiness-metrics .metric {
+  min-width: 0;
+  border: 1px solid rgba(132, 151, 142, 0.16);
+  border-radius: 12px;
+  padding: 10px;
+  background: rgba(255, 255, 255, 0.42);
+}
+
+.readiness-actions {
+  display: grid;
+  gap: 8px;
+}
+
+.readiness-actions div,
+.readiness-diff {
+  display: grid;
+  gap: 4px;
+  border: 1px solid rgba(132, 151, 142, 0.16);
+  border-radius: 12px;
+  padding: 10px 11px;
+  background: rgba(255, 255, 255, 0.38);
+}
+
+.readiness-actions strong,
+.readiness-diff strong {
+  color: #22312b;
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.readiness-green .readiness-head > strong {
+  background: #ddf4e8;
+  color: #236a4d;
+}
+
+.readiness-yellow .readiness-head > strong {
+  background: #fff2dc;
+  color: #916315;
+}
+
+.readiness-red .readiness-head > strong {
+  background: #fbe7e2;
+  color: #a23d32;
+}
+
+.readiness-gray .readiness-head > strong {
+  background: #eef1ef;
+  color: #66736d;
 }
 
 .type-row,
@@ -347,6 +448,17 @@ h3 {
   font-weight: 700;
 }
 
+.weekly-review-summary {
+  margin: 0 0 12px;
+  border: 1px solid rgba(44, 122, 123, 0.18);
+  border-radius: 12px;
+  padding: 10px 11px;
+  background: rgba(237, 246, 245, 0.46);
+  color: #32423d;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
 .review-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -384,6 +496,203 @@ h3 {
 .backup-status strong {
   color: var(--ink);
   font-size: 15px;
+}
+
+.monthly-report {
+  display: grid;
+  gap: 12px;
+}
+
+.monthly-summary {
+  margin: 0;
+  color: #43514c;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.monthly-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.monthly-generate {
+  justify-self: center;
+  min-width: 148px;
+}
+
+.monthly-share-sheet {
+  display: grid;
+  max-height: min(92vh, 820px);
+  gap: 12px;
+  overflow: auto;
+  padding: 14px 14px calc(env(safe-area-inset-bottom) + 16px);
+  background:
+    linear-gradient(180deg, rgba(248, 250, 247, 0.96), rgba(238, 244, 240, 0.96)),
+    #f4f7f3;
+}
+
+.monthly-share-toolbar,
+.monthly-body-switch {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.monthly-share-toolbar strong {
+  color: #22312b;
+  font-size: 16px;
+}
+
+.monthly-body-switch {
+  border: 1px solid rgba(132, 151, 142, 0.18);
+  border-radius: 12px;
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.58);
+  color: #43514c;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.monthly-card-stage {
+  display: grid;
+  justify-items: center;
+  overflow: auto;
+  border-radius: 18px;
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.42);
+}
+
+.monthly-share-card {
+  display: grid;
+  width: min(100%, 340px);
+  aspect-ratio: 9 / 16;
+  align-content: start;
+  gap: 14px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.82);
+  border-radius: 28px;
+  padding: 24px 22px;
+  background:
+    radial-gradient(circle at 88% 8%, rgba(255, 242, 220, 0.82), transparent 26%),
+    radial-gradient(circle at 10% 18%, rgba(221, 244, 232, 0.9), transparent 28%),
+    linear-gradient(155deg, #fbfcf8 0%, #eef6f2 48%, #f7f1e7 100%);
+  color: #1f2b27;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.88),
+    0 18px 44px rgba(30, 45, 40, 0.16);
+}
+
+.monthly-card-brand {
+  color: #5f716b;
+  font-size: 10px;
+  font-weight: 850;
+  letter-spacing: 0.08em;
+}
+
+.monthly-share-card h2 {
+  margin: 0;
+  font-size: 24px;
+  line-height: 1.12;
+}
+
+.monthly-card-goal {
+  margin: -8px 0 0;
+  color: #60716b;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.monthly-card-hero {
+  display: grid;
+  justify-items: start;
+  border-radius: 22px;
+  padding: 18px;
+  background: rgba(255, 255, 255, 0.58);
+}
+
+.monthly-card-hero strong {
+  color: #1f6668;
+  font-size: 54px;
+  line-height: 0.95;
+}
+
+.monthly-card-hero span,
+.monthly-card-grid span,
+.monthly-highlights span,
+.monthly-share-card footer {
+  color: #60716b;
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.monthly-card-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.monthly-card-grid div {
+  display: grid;
+  gap: 4px;
+  border: 1px solid rgba(132, 151, 142, 0.16);
+  border-radius: 16px;
+  padding: 11px;
+  background: rgba(255, 255, 255, 0.46);
+}
+
+.monthly-card-grid strong {
+  color: #24312d;
+  font-size: 20px;
+  line-height: 1.1;
+}
+
+.monthly-calendar {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 6px;
+  border-radius: 18px;
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.44);
+}
+
+.monthly-calendar i {
+  aspect-ratio: 1;
+  border-radius: 999px;
+  background: rgba(132, 151, 142, 0.18);
+}
+
+.monthly-calendar i.done {
+  background: #77b896;
+}
+
+.monthly-calendar i.hard {
+  background: #d99a2b;
+}
+
+.monthly-highlights {
+  display: grid;
+  gap: 6px;
+}
+
+.monthly-highlights span {
+  border-radius: 999px;
+  padding: 7px 10px;
+  background: rgba(255, 255, 255, 0.48);
+}
+
+.monthly-card-comment {
+  margin: 0;
+  color: #34433e;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.55;
+}
+
+.monthly-share-card footer {
+  margin-top: auto;
+  opacity: 0.82;
 }
 
 .backup-status {
@@ -618,7 +927,6 @@ h3 {
 .section-head .t-button,
 .action-row .t-button {
   display: inline-flex;
-  min-height: 44px;
   align-items: center;
   justify-content: center;
   gap: 8px;
@@ -651,7 +959,7 @@ h3 {
 .floating-checkin {
   position: fixed;
   right: max(14px, calc((100vw - 760px) / 2 + 14px));
-  bottom: calc(env(safe-area-inset-bottom) + 124px);
+  bottom: calc(env(safe-area-inset-bottom) + 110px);
   left: max(14px, calc((100vw - 760px) / 2 + 14px));
   z-index: 12;
   border: 1px solid rgba(255, 255, 255, 0.74);
@@ -1068,6 +1376,13 @@ h3 {
 .goal-panel {
   display: grid;
   gap: 12px;
+}
+.ai-plan-panel {
+  padding: 10px 16px;
+}
+.ai-plan-panel .section-head h3 {
+  margin-bottom: 0;
+  color: #236a4d;
 }
 
 .intervals-plan-panel {
@@ -1973,27 +2288,6 @@ h3 {
   white-space: nowrap;
 }
 
-.segment-fields .t-input,
-.segment-card-head .t-input {
-  flex: none;
-  height: 42px !important;
-  min-height: 42px !important;
-  padding: 0 12px !important;
-  align-items: center;
-}
-
-.segment-fields .t-input__wrap,
-.segment-card-head .t-input__wrap {
-  min-height: 0 !important;
-  justify-content: center;
-}
-
-.segment-fields .t-input input,
-.segment-card-head .t-input input {
-  min-height: 24px !important;
-  line-height: 24px;
-}
-
 @media (max-width: 380px) {
   .plan-head {
     display: grid;
@@ -2095,13 +2389,14 @@ label {
 .picker-trigger {
   display: flex;
   width: 100%;
-  min-height: 44px;
+  height: 42px;
+  min-height: 42px;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
   border: 1px solid rgba(117, 138, 128, 0.26);
   border-radius: 12px;
-  padding: 10px 12px;
+  padding: 0 12px;
   background: rgba(255, 255, 255, 0.58);
   color: #202425;
   outline: none;
@@ -2133,10 +2428,11 @@ label {
 select,
 .native-date {
   width: 100%;
-  min-height: 44px;
+  height: 42px;
+  min-height: 42px;
   border: 1px solid rgba(117, 138, 128, 0.26);
   border-radius: 12px;
-  padding: 10px 12px;
+  padding: 0 12px;
   background: rgba(255, 255, 255, 0.58);
   color: #202425;
   outline: none;
@@ -2153,6 +2449,25 @@ select:focus,
   border: 1px solid rgba(117, 138, 128, 0.26);
   border-radius: 12px;
   background: rgba(255, 255, 255, 0.58);
+}
+
+.t-input {
+  flex: none;
+  width: 100%;
+  height: 42px !important;
+  min-height: 42px !important;
+  align-items: center;
+  padding: 0 12px !important;
+}
+
+.t-input__wrap {
+  min-height: 0 !important;
+  justify-content: center;
+}
+
+.t-input__control {
+  min-height: 24px !important;
+  line-height: 24px;
 }
 
 .t-textarea {

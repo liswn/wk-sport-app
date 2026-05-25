@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
+import { toPng } from "html-to-image";
 import {
   Button,
   Dialog,
@@ -100,11 +101,9 @@ import {
   buildTemplatePreset,
   defaultStrengthExercises,
   formatExercises,
-  formatRangePercent,
   formatSegmentSummary,
   labelKind,
   parseExercises,
-  parseRangePercent,
   withCurrentPower,
 } from "./trainingUtils";
 
@@ -196,10 +195,21 @@ const DATA_CLEAR_LABELS: Record<LocalDataClearKey, string> = {
   trainingTemplates: "模板",
 };
 
-const POWER_WATT_OPTIONS: PickerOption[] = Array.from({ length: 401 }, (_, index) => ({
-  label: `${index}W`,
-  value: String(index),
-}));
+const POWER_WATT_OPTIONS: PickerOption[] = Array.from(
+  { length: 401 },
+  (_, index) => ({
+    label: `${index}W`,
+    value: String(index),
+  }),
+);
+
+const FTP_PERCENT_OPTIONS: PickerOption[] = Array.from(
+  { length: 181 },
+  (_, index) => ({
+    label: `${index + 20}%`,
+    value: String(index + 20),
+  }),
+);
 
 function App() {
   const [ready, setReady] = useState(false);
@@ -630,12 +640,9 @@ function TodayPage({
 }) {
   const [fatigueLoading, setFatigueLoading] = useState(false);
   const [fatigueError, setFatigueError] = useState("");
-
-  const handleFatigueAnalysis = async () => {
-    setFatigueError("");
-    setFatigueLoading(true);
-    try {
-      const history = buildTrainingHistorySummary({
+  const history = useMemo(
+    () =>
+      buildTrainingHistorySummary({
         settings,
         plans,
         checkins: allCheckins,
@@ -643,7 +650,42 @@ function TodayPage({
         activityAnalyses,
         bodyEntries,
         templates,
-      });
+      }),
+    [
+      activityAnalyses,
+      allCheckins,
+      bodyEntries,
+      plans,
+      settings,
+      templates,
+      trainingLogs,
+    ],
+  );
+  const readiness = useMemo(
+    () =>
+      buildReadinessInsight({
+        history,
+        todayPlan: plan,
+        tomorrowPlan: withCurrentPower(
+          plans[dateKey(addDays(new Date(), 1))] ??
+            defaultPlanForDate(
+              dateKey(addDays(new Date(), 1)),
+              settings.ftp,
+              templates,
+            ),
+          settings.ftp,
+          templates,
+        ),
+        todayCheckins: checkins,
+        activityAnalyses,
+      }),
+    [activityAnalyses, checkins, history, plan, plans, settings.ftp, templates],
+  );
+
+  const handleFatigueAnalysis = async () => {
+    setFatigueError("");
+    setFatigueLoading(true);
+    try {
       const result = await requestAiFatigueAnalysis({ settings, history });
       onFatigueReport({
         date: todayKey(),
@@ -698,6 +740,8 @@ function TodayPage({
         {plan.notes && <p className="note">{plan.notes}</p>}
       </div>
 
+      <ReadinessPanel insight={readiness} />
+
       <NutritionPanel plan={plan} />
 
       <div className="panel fatigue-panel">
@@ -744,6 +788,16 @@ function TodayPage({
         templates={templates}
       />
 
+      <MonthlyReport
+        plans={plans}
+        bodyEntries={bodyEntries}
+        checkins={allCheckins}
+        trainingLogs={trainingLogs}
+        activityAnalyses={activityAnalyses}
+        settings={settings}
+        templates={templates}
+      />
+
       {false && memo?.text.trim() && (
         <div className="panel memo-panel">
           <h3>今日备忘</h3>
@@ -755,6 +809,60 @@ function TodayPage({
         <CheckGrid checkins={checkins} onCheck={onCheck} compact />
       </div>
     </section>
+  );
+}
+
+type ReadinessInsight = {
+  level: "green" | "yellow" | "red" | "gray";
+  label: string;
+  title: string;
+  summary: string;
+  nextAction: string;
+  tomorrowAdvice: string;
+  metrics: FatigueLoadMetrics;
+  latestAnalysis?: ActivityAnalysis;
+};
+
+function ReadinessPanel({ insight }: { insight: ReadinessInsight }) {
+  return (
+    <div className={`panel readiness-panel readiness-${insight.level}`}>
+      <div className="readiness-head">
+        <div>
+          <h3>训练红绿灯</h3>
+          <span>{insight.title}</span>
+        </div>
+        <strong>{insight.label}</strong>
+      </div>
+      <p>{insight.summary}</p>
+      <div className="readiness-metrics">
+        <Metric
+          label="近7日 TSS"
+          value={formatMetric(insight.metrics.last7Tss)}
+        />
+        <Metric label="CTL" value={formatMetric(insight.metrics.ctl)} />
+        <Metric label="TSB" value={formatSignedMetric(insight.metrics.tsb)} />
+      </div>
+      <div className="readiness-actions">
+        <div>
+          <span>今天建议</span>
+          <strong>{insight.nextAction}</strong>
+        </div>
+        <div>
+          <span>明日微调</span>
+          <strong>{insight.tomorrowAdvice}</strong>
+        </div>
+      </div>
+      {insight.latestAnalysis && (
+        <div className="readiness-diff">
+          <span>最近偏差</span>
+          <strong>
+            {formatChineseDate(insight.latestAnalysis.date)} ·{" "}
+            {insight.latestAnalysis.differencePercent}%
+          </strong>
+          <p>{insight.latestAnalysis.suggestion}</p>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -808,15 +916,24 @@ function WeeklyReview({
     ? Math.round((habits.filter(Boolean).length / habits.length) * 100)
     : 0;
   const weightTrend = buildWeightTrendText(bodyEntries);
+  const reviewText = buildWeeklyReviewText({
+    done,
+    trainingDays,
+    actualMinutes,
+    strength,
+    averageRpe,
+    habitRate,
+  });
 
   return (
     <div className="panel weekly-review">
       <div className="section-head">
-        <h3>本周回顾</h3>
+        <h3>AI训练复盘周报</h3>
         <span>
           {formatMonthDay(week[0])} - {formatMonthDay(week[6])}
         </span>
       </div>
+      <p className="weekly-review-summary">{reviewText}</p>
       <div className="review-grid">
         <Metric label="训练完成" value={`${done}/${trainingDays}`} />
         <Metric
@@ -835,6 +952,211 @@ function WeeklyReview({
         <strong>{habitRate}%</strong>
       </div>
     </div>
+  );
+}
+
+function buildWeeklyReviewText({
+  done,
+  trainingDays,
+  actualMinutes,
+  strength,
+  averageRpe,
+  habitRate,
+}: {
+  done: number;
+  trainingDays: number;
+  actualMinutes: number;
+  strength: number;
+  averageRpe: string;
+  habitRate: number;
+}) {
+  if (!trainingDays)
+    return "本周以恢复为主，继续保持体重和执行记录，别为了打卡硬凑训练。";
+  if (!done && !actualMinutes) {
+    return "本周还没有记录到训练完成，建议先补齐实际训练、RPE 和体感，再看负荷趋势。";
+  }
+  const completion = Math.round((done / trainingDays) * 100);
+  const rpeHint =
+    averageRpe !== "-" && Number(averageRpe) >= 7
+      ? "主观强度偏高，接下来优先保证恢复。"
+      : "整体强度可控，继续看长期趋势。";
+  const strengthHint = strength ? `力量完成 ${strength} 次，` : "";
+  return `本周完成率 ${completion}%，${strengthHint}累计 ${actualMinutes || 0} 分钟，习惯执行 ${habitRate}%。${rpeHint}`;
+}
+
+type MonthlyReportStats = {
+  month: string;
+  monthLabel: string;
+  trainingCount: number;
+  rideCount: number;
+  distanceKm: number;
+  actualMinutes: number;
+  totalTss: number;
+  completionRate: number;
+  longestDistanceKm: number;
+  longestMinutes: number;
+  strengthCount: number;
+  trainingKinds: Array<{ label: string; count: number }>;
+  calendarDays: Array<{ date: string; trained: boolean; hard: boolean }>;
+  bodyTrend?: string;
+  summary: string;
+};
+
+function MonthlyReport({
+  plans,
+  bodyEntries,
+  checkins,
+  trainingLogs,
+  activityAnalyses,
+  settings,
+  templates,
+}: {
+  plans: Record<string, PlanDay>;
+  bodyEntries: Record<string, BodyEntry>;
+  checkins: Record<string, Checkins>;
+  trainingLogs: Record<string, TrainingLog>;
+  activityAnalyses: Record<string, ActivityAnalysis>;
+  settings: SettingsState;
+  templates: TrainingTemplate[];
+}) {
+  const [monthAnchor, setMonthAnchor] = useState(() => new Date());
+  const [open, setOpen] = useState(false);
+  const [includeBody, setIncludeBody] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState("");
+  const cardRef = useRef<HTMLDivElement>(null);
+  const stats = useMemo(
+    () =>
+      buildMonthlyReportStats({
+        monthAnchor,
+        plans,
+        bodyEntries,
+        checkins,
+        trainingLogs,
+        activityAnalyses,
+        settings,
+        templates,
+      }),
+    [
+      activityAnalyses,
+      bodyEntries,
+      checkins,
+      monthAnchor,
+      plans,
+      settings,
+      templates,
+      trainingLogs,
+    ],
+  );
+
+  const saveShareCard = async () => {
+    if (!cardRef.current) return;
+    setSaveError("");
+    setSaving(true);
+    try {
+      const image = await toPng(cardRef.current, {
+        cacheBust: true,
+        pixelRatio: 3,
+        backgroundColor: "#f4f7f3",
+      });
+      const link = document.createElement("a");
+      link.href = image;
+      link.download = `cycling-monthly-report-${stats.month}.png`;
+      link.click();
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : "生成图片失败，请重试。");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <>
+      <div className="panel monthly-report">
+        <div className="section-head">
+          <h3>训练月报</h3>
+          <span>{stats.monthLabel}</span>
+        </div>
+        <p className="monthly-summary">{stats.summary}</p>
+        <div className="monthly-metrics">
+          <Metric label="训练次数" value={`${stats.trainingCount} 次`} />
+          <Metric label="骑行公里" value={`${stats.distanceKm.toFixed(1)} km`} />
+          <Metric label="总时长" value={formatDuration(stats.actualMinutes)} />
+          <Metric label="本月 TSS" value={String(stats.totalTss)} />
+        </div>
+        <Button
+          className="monthly-generate"
+          shape="round"
+          variant="outline"
+          onClick={() => setOpen(true)}
+        >
+          生成分享卡片
+        </Button>
+      </div>
+      <Popup visible={open} placement="bottom" onClose={() => setOpen(false)} closeOnOverlayClick>
+        <div className="monthly-share-sheet">
+          <div className="monthly-share-toolbar">
+            <Button
+              size="small"
+              variant="outline"
+              shape="round"
+              onClick={() => setMonthAnchor((current) => addMonths(current, -1))}
+            >
+              上月
+            </Button>
+            <strong>{stats.monthLabel}</strong>
+            <Button
+              size="small"
+              variant="outline"
+              shape="round"
+              onClick={() => setMonthAnchor((current) => addMonths(current, 1))}
+            >
+              下月
+            </Button>
+          </div>
+          <label className="monthly-body-switch">
+            <span>在图片中显示身体趋势</span>
+            <Switch size="small" value={includeBody} onChange={(value) => setIncludeBody(Boolean(value))} />
+          </label>
+          <div className="monthly-card-stage">
+            <div className="monthly-share-card" ref={cardRef}>
+              <div className="monthly-card-brand">WK SPORT / MONTHLY REPORT</div>
+              <h2>{stats.monthLabel} 骑行训练月报</h2>
+              <p className="monthly-card-goal">减脂 + 提升功率 · FTP {settings.ftp}W</p>
+              <div className="monthly-card-hero">
+                <strong>{stats.distanceKm.toFixed(1)}</strong>
+                <span>本月骑行公里</span>
+              </div>
+              <div className="monthly-card-grid">
+                <div><strong>{stats.trainingCount}</strong><span>训练次数</span></div>
+                <div><strong>{formatDuration(stats.actualMinutes)}</strong><span>训练时长</span></div>
+                <div><strong>{stats.totalTss}</strong><span>训练负荷 TSS</span></div>
+                <div><strong>{stats.completionRate}%</strong><span>计划完成率</span></div>
+              </div>
+              <div className="monthly-calendar">
+                {stats.calendarDays.map((day) => (
+                  <i
+                    key={day.date}
+                    className={day.trained ? (day.hard ? "hard" : "done") : ""}
+                  />
+                ))}
+              </div>
+              <div className="monthly-highlights">
+                <span>最长骑行 {stats.longestDistanceKm.toFixed(1)} km / {formatDuration(stats.longestMinutes)}</span>
+                <span>力量训练 {stats.strengthCount} 次</span>
+                {includeBody && stats.bodyTrend && <span>{stats.bodyTrend}</span>}
+              </div>
+              <p className="monthly-card-comment">{stats.summary}</p>
+              <footer>Generated by wk-sport-app · 数据保存在本地</footer>
+            </div>
+          </div>
+          {saveError && <p className="sync-error">{saveError}</p>}
+          <Button block shape="round" theme="primary" loading={saving} onClick={saveShareCard}>
+            保存 9:16 图片
+          </Button>
+        </div>
+      </Popup>
+    </>
   );
 }
 
@@ -1407,10 +1729,6 @@ function PlanPage({
             </Button>
           </div>
         </div>
-        <p className="muted">
-          使用最近 28 天的训练摘要分析和手动完成记录，请求你在设置里配置的 AI
-          接口生成从今天开始连续 7 天的训练与饮食建议。
-        </p>
         {aiError && <p className="sync-error">{aiError}</p>}
         {aiStatus && <p className="sync-success">{aiStatus}</p>}
         {aiRecommendation && (
@@ -1938,6 +2256,63 @@ function PowerRangePickerField({
               onChange([
                 Math.round(Math.min(first, second)),
                 Math.round(Math.max(first, second)),
+              ]);
+            }
+            setOpen(false);
+          }}
+        />
+      </Popup>
+    </div>
+  );
+}
+
+function FtpPercentRangePickerField({
+  value,
+  placeholder,
+  onChange,
+}: {
+  value?: [number, number];
+  placeholder: string;
+  onChange: (range: [number, number] | undefined) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const low = Math.round((value?.[0] ?? 0.55) * 100);
+  const high = Math.round((value?.[1] ?? 0.75) * 100);
+  const lower = Math.max(20, Math.min(low, 200));
+  const upper = Math.max(20, Math.min(high, 200));
+  const display = value ? `${lower}-${upper}%` : placeholder;
+
+  return (
+    <div className="power-range-field">
+      <button type="button" onClick={() => setOpen(true)}>
+        <strong className={value ? "" : "placeholder"}>{display}</strong>
+        <em>选择</em>
+      </button>
+      <Popup
+        visible={open}
+        placement="bottom"
+        closeOnOverlayClick
+        onClose={() => setOpen(false)}
+      >
+        <Picker
+          title="选择 FTP 百分比区间"
+          columns={[FTP_PERCENT_OPTIONS, FTP_PERCENT_OPTIONS]}
+          value={[String(lower), String(Math.max(lower, upper))]}
+          cancelBtn={value ? "清空" : false}
+          confirmBtn="确定"
+          onCancel={() => {
+            onChange(undefined);
+            setOpen(false);
+          }}
+          onConfirm={(nextValue) => {
+            const first = Number(nextValue[0]);
+            const second = Number(nextValue[1]);
+            if (!Number.isFinite(first) || !Number.isFinite(second)) {
+              onChange(undefined);
+            } else {
+              onChange([
+                Math.round(Math.min(first, second)) / 100,
+                Math.round(Math.max(first, second)) / 100,
               ]);
             }
             setOpen(false);
@@ -2906,13 +3281,11 @@ function SettingsPage({
                     </label>
                     <label>
                       FTP百分比
-                      <Input
-                        value={formatRangePercent(selected.rangePercent)}
-                        placeholder="例如 63-72"
-                        onChange={(value) =>
-                          updateTemplate({
-                            rangePercent: parseRangePercent(String(value)),
-                          })
+                      <FtpPercentRangePickerField
+                        value={selected.rangePercent}
+                        placeholder="选择 FTP 百分比区间"
+                        onChange={(rangePercent) =>
+                          updateTemplate({ rangePercent })
                         }
                       />
                     </label>
@@ -3404,13 +3777,33 @@ function LocalDataSize({
   const bytes = new Blob([JSON.stringify(snapshot)]).size;
   const rows: Array<{ key: LocalDataClearKey; count: number; hint: string }> = [
     { key: "plans", count: countRecord(plans), hint: "已编辑日计划" },
-    { key: "bodyEntries", count: countRecord(bodyEntries), hint: "体重身体记录" },
+    {
+      key: "bodyEntries",
+      count: countRecord(bodyEntries),
+      hint: "体重身体记录",
+    },
     { key: "checkins", count: countRecord(checkins), hint: "每日执行打卡" },
-    { key: "trainingLogs", count: countRecord(trainingLogs), hint: "实际完成记录" },
+    {
+      key: "trainingLogs",
+      count: countRecord(trainingLogs),
+      hint: "实际完成记录",
+    },
     { key: "dayMemos", count: countRecord(dayMemos), hint: "日历备忘" },
-    { key: "activityAnalyses", count: countRecord(activityAnalyses), hint: "Intervals 摘要" },
-    { key: "lastFatigueReport", count: lastFatigueReport ? 1 : 0, hint: "最后一次 AI 分析" },
-    { key: "aiCoachSession", count: aiCoachSession?.messages.length ?? 0, hint: "聊天消息" },
+    {
+      key: "activityAnalyses",
+      count: countRecord(activityAnalyses),
+      hint: "Intervals 摘要",
+    },
+    {
+      key: "lastFatigueReport",
+      count: lastFatigueReport ? 1 : 0,
+      hint: "最后一次 AI 分析",
+    },
+    {
+      key: "aiCoachSession",
+      count: aiCoachSession?.messages.length ?? 0,
+      hint: "聊天消息",
+    },
     { key: "trainingTemplates", count: templates.length, hint: "模板库" },
   ];
 
@@ -3629,6 +4022,331 @@ function buildFatigueLoadMetrics(
     dataDays: rows.length,
     loadDays: dailyLoads.filter((value) => value > 0).length,
   };
+}
+
+function buildReadinessInsight({
+  history,
+  todayPlan,
+  tomorrowPlan,
+  todayCheckins,
+  activityAnalyses,
+}: {
+  history: TrainingHistorySummary;
+  todayPlan: PlanDay;
+  tomorrowPlan: PlanDay;
+  todayCheckins: Checkins;
+  activityAnalyses: Record<string, ActivityAnalysis>;
+}): ReadinessInsight {
+  const metrics = history.loadMetrics;
+  const recentRows = history.days.slice(-7);
+  const recentTired = recentRows.filter(
+    (row) =>
+      row.feeling === "tired" ||
+      row.feeling === "very-tired" ||
+      (row.rpe ?? 0) >= 8,
+  ).length;
+  const highRpe = recentRows.filter((row) => (row.rpe ?? 0) >= 8).length;
+  const latestAnalysis = Object.values(activityAnalyses)
+    .filter((analysis) => analysis.activityCount > 0)
+    .sort((a, b) => a.date.localeCompare(b.date))
+    .at(-1);
+  const isHardToday =
+    todayPlan.kind === "sweetspot" || todayPlan.kind === "threshold";
+  const isHardTomorrow =
+    tomorrowPlan.kind === "sweetspot" || tomorrowPlan.kind === "threshold";
+  const isDone = Boolean(todayCheckins.trainingDone);
+  let level: ReadinessInsight["level"] = "gray";
+  let label = "无";
+  let title = "先补齐训练记录";
+  let summary =
+    "最近有效训练数据还不够，建议继续同步 Intervals.icu 或记录实际时长、RPE 和体感。";
+  let nextAction = metrics.nextTraining;
+
+  if (metrics.loadDays >= 5) {
+    if (
+      metrics.status === "需要降载" ||
+      (metrics.tsb ?? 0) <= -18 ||
+      recentTired >= 3 ||
+      highRpe >= 2
+    ) {
+      level = "red";
+      label = "红灯";
+      title = "今天优先恢复";
+      summary = `近7天 TSS ${formatMetric(metrics.last7Tss)}，TSB ${formatSignedMetric(metrics.tsb)}，疲劳信号偏高。`;
+      nextAction = isHardToday
+        ? "把今天强度降为恢复骑或休息"
+        : "按恢复/Z2执行，避免加量";
+    } else if (
+      metrics.status === "偏疲劳" ||
+      (metrics.tsb ?? 0) <= -8 ||
+      recentTired >= 2
+    ) {
+      level = "yellow";
+      label = "黄灯";
+      title = "可以练，但别硬顶";
+      summary = `负荷处在可训练但需要克制的区间，TSB ${formatSignedMetric(metrics.tsb)}，近7天疲劳天数 ${recentTired}。`;
+      nextAction = isHardToday
+        ? "强度保守执行，状态差就改 Z2"
+        : "按计划执行，RPE 控制在 6 以内";
+    } else {
+      level = "green";
+      label = "绿灯";
+      title = "状态允许按计划推进";
+      summary = `近7天 TSS ${formatMetric(metrics.last7Tss)}，CTL ${formatMetric(metrics.ctl)}，负荷结构比较平稳。`;
+      nextAction = metrics.nextTraining;
+    }
+  }
+
+  const tomorrowAdvice = buildTomorrowAdjustment({
+    level,
+    isDone,
+    tomorrowPlan,
+    isHardTomorrow,
+  });
+
+  return {
+    level,
+    label,
+    title,
+    summary,
+    nextAction,
+    tomorrowAdvice,
+    metrics,
+    latestAnalysis,
+  };
+}
+
+function buildTomorrowAdjustment({
+  level,
+  isDone,
+  tomorrowPlan,
+  isHardTomorrow,
+}: {
+  level: ReadinessInsight["level"];
+  isDone: boolean;
+  tomorrowPlan: PlanDay;
+  isHardTomorrow: boolean;
+}) {
+  if (level === "gray") return "先记录今天实际训练，再判断是否调整。";
+  if (level === "red") {
+    return isHardTomorrow
+      ? "建议把明天改为休息或恢复骑。"
+      : "明天保持低强度，不补今天的量。";
+  }
+  if (level === "yellow") {
+    return isHardTomorrow
+      ? "明天强度日先降一级，优先 Z2。"
+      : "明天按计划，但不要追加时长。";
+  }
+  if (!isDone && tomorrowPlan.kind !== "rest") {
+    return "今天若没完成，明天也不要盲目补课，按原计划观察。";
+  }
+  return isHardTomorrow
+    ? "明天可以做强度，热身后再决定是否完整执行。"
+    : "明天按计划执行即可。";
+}
+
+function buildMonthlyReportStats({
+  monthAnchor,
+  plans,
+  bodyEntries,
+  checkins,
+  trainingLogs,
+  activityAnalyses,
+  settings,
+  templates,
+}: {
+  monthAnchor: Date;
+  plans: Record<string, PlanDay>;
+  bodyEntries: Record<string, BodyEntry>;
+  checkins: Record<string, Checkins>;
+  trainingLogs: Record<string, TrainingLog>;
+  activityAnalyses: Record<string, ActivityAnalysis>;
+  settings: SettingsState;
+  templates: TrainingTemplate[];
+}): MonthlyReportStats {
+  const start = new Date(monthAnchor.getFullYear(), monthAnchor.getMonth(), 1);
+  const end = new Date(monthAnchor.getFullYear(), monthAnchor.getMonth() + 1, 0);
+  const month = `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, "0")}`;
+  const keys = Array.from({ length: end.getDate() }, (_, index) =>
+    dateKey(new Date(start.getFullYear(), start.getMonth(), index + 1)),
+  );
+  const rows = keys.map((key) => {
+    const plan = withCurrentPower(
+      plans[key] ?? defaultPlanForDate(key, settings.ftp, templates),
+      settings.ftp,
+      templates,
+    );
+    const log = trainingLogs[key];
+    const analysis = activityAnalyses[key];
+    const actualMinutes =
+      positiveNumber(log?.actualMinutes) ?? analysis?.actualMinutes ?? 0;
+    const distanceKm = analysis?.distanceKm ?? 0;
+    const trainingLoad =
+      analysis?.trainingLoad ?? estimatePlannedTssFromLog(plan, actualMinutes);
+    const trained = Boolean(
+      checkins[key]?.trainingDone ||
+        actualMinutes ||
+        (analysis?.activityCount ?? 0) > 0,
+    );
+    return {
+      date: key,
+      plan,
+      trained,
+      actualMinutes,
+      distanceKm,
+      trainingLoad,
+      activityCount: analysis?.activityCount ?? 0,
+      hard: trained && (plan.kind === "sweetspot" || plan.kind === "threshold"),
+    };
+  });
+  const plannedTrainingDays = rows.filter((row) => row.plan.kind !== "rest").length;
+  const trainedRows = rows.filter((row) => row.trained);
+  const trainingCount = trainedRows.length;
+  const rideCount = rows.reduce(
+    (sum, row) =>
+      sum +
+      (row.activityCount ||
+        (row.trained && row.plan.kind !== "rest" && row.plan.kind !== "strength"
+          ? 1
+          : 0)),
+    0,
+  );
+  const actualMinutes = Math.round(
+    rows.reduce((sum, row) => sum + row.actualMinutes, 0),
+  );
+  const distanceKm = Number(
+    rows.reduce((sum, row) => sum + row.distanceKm, 0).toFixed(1),
+  );
+  const totalTss = Math.round(
+    rows.reduce((sum, row) => sum + row.trainingLoad, 0),
+  );
+  const longestDistanceKm = Math.max(0, ...rows.map((row) => row.distanceKm));
+  const longestMinutes = Math.max(0, ...rows.map((row) => row.actualMinutes));
+  const strengthCount = rows.filter(
+    (row) => row.trained && Boolean(row.plan.exercises?.length),
+  ).length;
+  const kindCounts = new Map<string, number>();
+  for (const row of trainedRows) {
+    const label = labelKind(row.plan.kind);
+    kindCounts.set(label, (kindCounts.get(label) ?? 0) + 1);
+  }
+  const completionRate = plannedTrainingDays
+    ? Math.round((trainingCount / plannedTrainingDays) * 100)
+    : 0;
+  const bodyTrend = buildMonthlyBodyTrend(bodyEntries, month);
+
+  return {
+    month,
+    monthLabel: new Intl.DateTimeFormat("zh-CN", {
+      year: "numeric",
+      month: "long",
+    }).format(start),
+    trainingCount,
+    rideCount,
+    distanceKm,
+    actualMinutes,
+    totalTss,
+    completionRate,
+    longestDistanceKm,
+    longestMinutes,
+    strengthCount,
+    trainingKinds: Array.from(kindCounts.entries()).map(([label, count]) => ({
+      label,
+      count,
+    })),
+    calendarDays: rows.map((row) => ({
+      date: row.date,
+      trained: row.trained,
+      hard: row.hard,
+    })),
+    bodyTrend,
+    summary: buildMonthlySummary({
+      trainingCount,
+      rideCount,
+      distanceKm,
+      actualMinutes,
+      totalTss,
+      completionRate,
+      bodyTrend,
+    }),
+  };
+}
+
+function estimatePlannedTssFromLog(plan: PlanDay, actualMinutes: number) {
+  if (!actualMinutes) return 0;
+  const intensity =
+    plan.kind === "threshold"
+      ? 0.95
+      : plan.kind === "sweetspot"
+        ? 0.9
+        : plan.kind === "z2" || plan.kind === "aerobic"
+          ? 0.68
+          : plan.kind === "recovery"
+            ? 0.55
+            : 0.45;
+  return Math.round((actualMinutes / 60) * intensity * intensity * 100);
+}
+
+function buildMonthlyBodyTrend(
+  bodyEntries: Record<string, BodyEntry>,
+  month: string,
+) {
+  const entries = Object.values(bodyEntries)
+    .filter((entry) => entry.date.startsWith(month))
+    .sort((a, b) => a.date.localeCompare(b.date));
+  const weightValues = entries
+    .map((entry) => positiveNumber(entry.weightKg))
+    .filter((value): value is number => Boolean(value));
+  const waistValues = entries
+    .map((entry) => positiveNumber(entry.waistCm))
+    .filter((value): value is number => Boolean(value));
+  const parts = [];
+  if (weightValues.length >= 2) {
+    parts.push(`体重 ${formatDelta(weightValues.at(-1)! - weightValues[0])}kg`);
+  }
+  if (waistValues.length >= 2) {
+    parts.push(`腰围 ${formatDelta(waistValues.at(-1)! - waistValues[0])}cm`);
+  }
+  return parts.length ? parts.join(" / ") : undefined;
+}
+
+function buildMonthlySummary({
+  trainingCount,
+  rideCount,
+  distanceKm,
+  totalTss,
+  completionRate,
+  bodyTrend,
+}: {
+  trainingCount: number;
+  rideCount: number;
+  distanceKm: number;
+  actualMinutes: number;
+  totalTss: number;
+  completionRate: number;
+  bodyTrend?: string;
+}) {
+  if (!trainingCount) {
+    return "这个月还没有可统计的训练记录，先完成几次训练再生成更有内容的月报。";
+  }
+  const distanceText = distanceKm > 0 ? `骑行 ${distanceKm.toFixed(1)} km，` : "";
+  const loadText = totalTss ? `累计 TSS ${totalTss}，` : "";
+  const bodyText = bodyTrend ? `身体趋势：${bodyTrend}。` : "";
+  return `这个月完成 ${trainingCount} 天训练，${rideCount} 次骑行，${distanceText}${loadText}计划完成率 ${completionRate}%。${bodyText}稳住节奏，比单次爆发更重要。`;
+}
+
+function formatDuration(minutes: number) {
+  if (!minutes) return "0 分钟";
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  if (!hours) return `${rest} 分钟`;
+  return rest ? `${hours}小时${rest}分` : `${hours}小时`;
+}
+
+function formatDelta(value: number) {
+  const rounded = Number(value.toFixed(1));
+  return rounded > 0 ? `+${rounded}` : String(rounded);
 }
 
 function estimateDailyTss(row: TrainingHistoryDay) {
