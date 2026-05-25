@@ -2881,9 +2881,17 @@ function TrainingCoachSheet({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [deleteMessageId, setDeleteMessageId] = useState("");
+  const [messageActionMenu, setMessageActionMenu] = useState<{
+    messageId: string;
+    x: number;
+    y: number;
+  } | null>(null);
   const messageListRef = useRef<HTMLDivElement | null>(null);
   const longPressTimer = useRef<number | undefined>(undefined);
   const messages = session?.messages ?? [];
+  const actionMessage = messageActionMenu
+    ? messages.find((message) => message.id === messageActionMenu.messageId)
+    : undefined;
   const pendingPatch = session?.pendingPatch?.appliedAt
     ? undefined
     : session?.pendingPatch;
@@ -2987,15 +2995,38 @@ function TrainingCoachSheet({
     saveSession(messages.filter((message) => message.id !== messageId));
   };
 
-  const startMessagePress = (messageId: string) => {
+  const startMessagePress = (
+    messageId: string,
+    event: React.PointerEvent<HTMLDivElement>,
+  ) => {
     window.clearTimeout(longPressTimer.current);
+    const x = Math.min(Math.max(event.clientX, 82), window.innerWidth - 82);
+    const y = Math.max(event.clientY - 12, 84);
     longPressTimer.current = window.setTimeout(() => {
-      setDeleteMessageId(messageId);
+      setMessageActionMenu({ messageId, x, y });
     }, 560);
   };
 
   const cancelMessagePress = () => {
     window.clearTimeout(longPressTimer.current);
+  };
+
+  const copyMessage = async () => {
+    if (!actionMessage?.content) return;
+    try {
+      await navigator.clipboard.writeText(actionMessage.content);
+    } catch {
+      const input = document.createElement("textarea");
+      input.value = actionMessage.content;
+      input.setAttribute("readonly", "true");
+      input.style.position = "fixed";
+      input.style.opacity = "0";
+      document.body.appendChild(input);
+      input.select();
+      document.execCommand("copy");
+      document.body.removeChild(input);
+    }
+    setMessageActionMenu(null);
   };
 
   return (
@@ -3041,10 +3072,11 @@ function TrainingCoachSheet({
               <div
                 key={message.id}
                 className={`coach-message ${message.role}`}
-                onPointerDown={() => startMessagePress(message.id)}
+                onPointerDown={(event) => startMessagePress(message.id, event)}
                 onPointerUp={cancelMessagePress}
                 onPointerCancel={cancelMessagePress}
                 onPointerLeave={cancelMessagePress}
+                onContextMenu={(event) => event.preventDefault()}
               >
                 <p>{message.content}</p>
               </div>
@@ -3127,6 +3159,37 @@ function TrainingCoachSheet({
           </Button>
         </div>
       </div>
+      {messageActionMenu && actionMessage && (
+        <>
+          <button
+            type="button"
+            className="coach-action-backdrop"
+            aria-label="关闭消息操作"
+            onClick={() => setMessageActionMenu(null)}
+          />
+          <div
+            className="coach-action-bubble"
+            style={{
+              left: messageActionMenu.x,
+              top: messageActionMenu.y,
+            }}
+          >
+            <button type="button" onClick={copyMessage}>
+              复制
+            </button>
+            <button
+              type="button"
+              className="danger"
+              onClick={() => {
+                setDeleteMessageId(messageActionMenu.messageId);
+                setMessageActionMenu(null);
+              }}
+            >
+              删除
+            </button>
+          </div>
+        </>
+      )}
       <Dialog
         visible={Boolean(deleteMessageId)}
         title="删除这条消息？"
@@ -3139,6 +3202,7 @@ function TrainingCoachSheet({
         onConfirm={() => {
           deleteMessage(deleteMessageId);
           setDeleteMessageId("");
+          setMessageActionMenu(null);
         }}
       />
     </Popup>
@@ -3419,6 +3483,9 @@ function SettingsPage({
   const [clearDataKey, setClearDataKey] = useState<LocalDataClearKey | null>(
     null,
   );
+  const [templateDialog, setTemplateDialog] = useState<
+    "delete" | "reset" | null
+  >(null);
   const settingsScrollPositions = useRef<Partial<Record<SettingsView, number>>>(
     {},
   );
@@ -3462,26 +3529,16 @@ function SettingsPage({
 
   const deleteTemplate = () => {
     if (!selected || templates.length <= 1) return;
-    if (
-      !window.confirm(
-        `删除模板“${selected.name}”？已安排到日计划里的内容不会自动删除。`,
-      )
-    )
-      return;
     const next = templates.filter((template) => template.id !== selected.id);
     onTemplates(next);
     setSelectedId(next[0]?.id ?? "");
+    setTemplateDialog(null);
   };
 
   const resetTemplates = () => {
-    if (
-      !window.confirm(
-        "恢复默认模板？这会替换当前模板库，但不会删除已经编辑过的周计划。",
-      )
-    )
-      return;
     onTemplates(defaultTrainingTemplates);
     setSelectedId(defaultTrainingTemplates[0].id);
+    setTemplateDialog(null);
   };
 
   const applyKindPreset = (kind: TrainingKind) => {
@@ -3927,7 +3984,7 @@ function SettingsPage({
                   <Button
                     variant="outline"
                     icon={<RotateCcw size={17} />}
-                    onClick={resetTemplates}
+                    onClick={() => setTemplateDialog("reset")}
                   >
                     恢复默认
                   </Button>
@@ -3935,7 +3992,7 @@ function SettingsPage({
                     theme="danger"
                     variant="outline"
                     icon={<Trash2 size={17} />}
-                    onClick={deleteTemplate}
+                    onClick={() => setTemplateDialog("delete")}
                     disabled={templates.length <= 1}
                   >
                     删除模板
@@ -4048,6 +4105,28 @@ function SettingsPage({
         onClose={() => setClearDataKey(null)}
         onCancel={() => setClearDataKey(null)}
         onConfirm={handleClearDataItem}
+      />
+      <Dialog
+        visible={Boolean(templateDialog)}
+        title={templateDialog === "delete" ? "删除训练模板？" : "恢复默认模板？"}
+        content={
+          <div className="dialog-copy">
+            {templateDialog === "delete" ? (
+              <p>
+                删除模板“{selected?.name ?? ""}”？已安排到日计划里的内容不会自动删除。
+              </p>
+            ) : (
+              <p>
+                这会用默认模板替换当前模板库，但不会删除已经写入到日计划里的内容。
+              </p>
+            )}
+          </div>
+        }
+        cancelBtn="取消"
+        confirmBtn={templateDialog === "delete" ? "确认删除" : "确认恢复"}
+        onClose={() => setTemplateDialog(null)}
+        onCancel={() => setTemplateDialog(null)}
+        onConfirm={templateDialog === "delete" ? deleteTemplate : resetTemplates}
       />
     </section>
   );
