@@ -208,6 +208,52 @@ h3 {
     var(--content-surface-strong);
 }
 
+.today-nutrition {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+  border-top: 1px solid rgba(132, 151, 142, 0.18);
+  padding-top: 14px;
+}
+
+.today-nutrition h3 {
+  font-size: 16px;
+}
+
+.today-nutrition .nutrition-list {
+  grid-template-columns: 1fr;
+}
+
+.today-nutrition .nutrition-note {
+  margin-top: 0;
+}
+
+.training-status-panel {
+  display: grid;
+  gap: 14px;
+}
+
+.training-status-panel > .section-head {
+  margin-bottom: -2px;
+}
+
+.training-status-panel .readiness-panel,
+.training-status-panel .weekly-review,
+.status-ai-section {
+  border-top: 1px solid rgba(132, 151, 142, 0.16);
+  padding-top: 14px;
+}
+
+.training-status-panel .readiness-panel {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.status-ai-section {
+  display: grid;
+  gap: 10px;
+}
+
 .readiness-panel {
   display: grid;
   gap: 12px;
@@ -417,21 +463,67 @@ h3 {
 }
 
 .power-profile-chart {
-  height: 68px;
-  overflow: hidden;
+  display: block;
+  width: 100%;
+  height: auto;
   border-bottom: 1px solid rgba(85, 100, 96, 0.18);
-  border-radius: 8px 8px 0 0;
-  background: repeating-linear-gradient(
-    to bottom,
-    transparent 0,
-    transparent 18px,
-    rgba(85, 100, 96, 0.26) 19px,
-    transparent 20px
-  );
+  outline: none;
+  -webkit-tap-highlight-color: transparent;
 }
 
-.recharts-power-profile svg {
-  overflow: visible;
+.power-profile-chart:focus,
+.power-profile-chart:focus-visible {
+  outline: none;
+}
+
+.power-axis-label,
+.power-time-label,
+.power-ftp-label {
+  fill: #8a918e;
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.power-ftp-label {
+  fill: #6c7471;
+  font-size: 13px;
+}
+
+.power-grid-line {
+  stroke: rgba(85, 100, 96, 0.12);
+  stroke-width: 1;
+}
+
+.power-ftp-line {
+  stroke: rgba(85, 100, 96, 0.42);
+  stroke-width: 1.4;
+  stroke-dasharray: 5 5;
+}
+
+.power-shape {
+  opacity: 0.9;
+  stroke-width: 2;
+}
+
+.power-shape.pd-recovery {
+  fill: #6ca7d7;
+  stroke: #5d91bd;
+}
+
+.power-shape.pd-z2 {
+  fill: #77b456;
+  stroke: #5f9945;
+}
+
+.power-shape.pd-tempo {
+  fill: #c3b559;
+  stroke: #a49541;
+}
+
+.power-shape.pd-sweet,
+.power-shape.pd-threshold {
+  fill: #d96378;
+  stroke: #b94d60;
 }
 
 .muted-note {
@@ -458,7 +550,15 @@ h3 {
 }
 
 .nutrition-panel h3 {
-  margin-bottom: 12px;
+  margin-bottom: 4px;
+}
+
+.nutrition-context {
+  margin: 0 0 12px;
+  color: #66716b;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.45;
 }
 
 .weekly-review .section-head {
@@ -486,6 +586,63 @@ h3 {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
+}
+
+.compare-metric,
+.habit-compare {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+  border: 1px solid rgba(133, 153, 143, 0.2);
+  border-radius: 12px;
+  padding: 11px 12px;
+  background:
+    linear-gradient(
+      180deg,
+      rgba(255, 255, 255, 0.66),
+      rgba(247, 250, 246, 0.5)
+    ),
+    rgba(255, 255, 255, 0.34);
+}
+
+.compare-metric span,
+.habit-compare span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.compare-metric strong,
+.habit-compare strong {
+  color: var(--ink);
+  font-size: 17px;
+  line-height: 1.2;
+}
+
+.compare-metric em,
+.habit-compare em {
+  overflow: hidden;
+  color: #72807a;
+  font-size: 11px;
+  font-style: normal;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.review-habit-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.habit-compare {
+  padding: 10px;
+}
+
+.habit-compare strong {
+  color: #236a4d;
 }
 
 .review-line,
@@ -524,6 +681,19 @@ h3 {
 .monthly-report {
   display: grid;
   gap: 12px;
+}
+
+.monthly-report-entry {
+  gap: 10px;
+}
+
+.monthly-report-entry .monthly-metrics {
+  display: none;
+}
+
+.monthly-report-entry .monthly-generate {
+  justify-self: end;
+  min-width: 132px;
 }
 
 .monthly-summary {
@@ -992,10 +1162,24 @@ h3 {
   background: rgba(255, 253, 247, 0.62);
 }
 
+.nutrition-list div.primary {
+  border-color: rgba(101, 129, 104, 0.32);
+  border-left: 4px solid rgba(87, 135, 93, 0.76);
+  background: linear-gradient(
+    135deg,
+    rgba(241, 249, 238, 0.92),
+    rgba(255, 253, 247, 0.78)
+  );
+}
+
 .nutrition-list span {
   color: #7b6843;
   font-size: 12px;
   font-weight: 700;
+}
+
+.nutrition-list div.primary span {
+  color: #557b5a;
 }
 
 .nutrition-list strong {
@@ -1489,6 +1673,9 @@ h3 {
   display: grid;
   gap: 12px;
 }
+.month-sync-panel {
+  padding: 10px 16px;
+}
 .ai-plan-panel {
   padding: 10px 16px;
 }
@@ -1928,7 +2115,7 @@ h3 {
 
 .coach-sheet {
   display: grid;
-  max-height: min(86vh, 760px);
+  height: 90vh;
   gap: 12px;
   overflow: hidden;
   border-radius: 22px 22px 0 0;
@@ -1974,7 +2161,6 @@ h3 {
 
 .coach-quick button {
   flex: 0 0 auto;
-  min-height: 34px;
   border: 1px solid rgba(132, 151, 142, 0.22);
   border-radius: 999px;
   padding: 0 11px;
@@ -1987,7 +2173,7 @@ h3 {
 .coach-messages {
   display: grid;
   align-content: start;
-  max-height: 32vh;
+  flex: 1;
   gap: 8px;
   overflow: auto;
   border: 1px solid rgba(132, 151, 142, 0.16);
@@ -1998,6 +2184,7 @@ h3 {
 
 .coach-message {
   display: flex;
+  touch-action: manipulation;
 }
 
 .coach-message p,
@@ -2008,6 +2195,16 @@ h3 {
   font-size: 13px;
   line-height: 1.55;
   white-space: pre-wrap;
+  transition:
+    opacity 120ms ease,
+    transform 120ms ease;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.coach-message:active p {
+  opacity: 0.78;
+  transform: scale(0.985);
 }
 
 .coach-message.user {
@@ -2118,6 +2315,9 @@ h3 {
 .memo-editor {
   display: grid;
   gap: 12px;
+}
+.memo-editor .plan-head {
+  border-top: none;
 }
 
 .week-date-picker {

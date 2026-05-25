@@ -30,12 +30,19 @@ export function withCurrentPower(plan: PlanDay, ftp: number, templates: Training
 }
 
 export function buildNutritionTips(plan: PlanDay) {
-  const isHardRide = plan.kind === "sweetspot" || plan.kind === "threshold" || plan.templateId === "saturday-long-z2";
+  const planNutrition = plan.nutrition?.trim();
+  const isLongRide = (plan.durationMinutes ?? 0) >= 75;
+  const isHardRide =
+    plan.kind === "sweetspot" ||
+    plan.kind === "threshold" ||
+    plan.templateId === "saturday-long-z2" ||
+    isLongRide;
   const isEasyRide = plan.kind === "recovery" || plan.kind === "z2" || plan.kind === "aerobic";
   const hasStrength = Boolean(plan.exercises?.length);
 
   if (plan.kind === "rest" && !hasStrength) {
     return [
+      ...(planNutrition ? [{ label: "计划提示", value: planNutrition }] : []),
       { label: "训练前", value: "无需刻意加餐，保持正常饮食。" },
       { label: "训练后", value: "保证蛋白质，晚餐简单清淡即可。" },
       { label: "蛋白质", value: "鸡蛋、豆腐、牛肉、虾、猪里脊都可以轮换。" }
@@ -43,6 +50,7 @@ export function buildNutritionTips(plan: PlanDay) {
   }
 
   return [
+    ...(planNutrition ? [{ label: "计划提示", value: planNutrition }] : []),
     {
       label: "训练前",
       value: isHardRide

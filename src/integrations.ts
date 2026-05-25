@@ -517,8 +517,11 @@ export async function requestAiCoachChat({
     "你是这个本地训练记录应用里的“训练顾问”。优先结合骑行、力量训练、恢复、训练饮食执行、身体趋势、同步配置和训练计划回答；如果问题超出你的能力，简短说明边界并尽量给出可执行的下一步。",
     "不要修改实际完成记录、打卡、体重、体脂、腰围、胸围、FTP、Intervals.icu 同步结果和历史训练日志。",
     "如果需要调整计划，只能通过 planPatch 给出可预览的计划修改；用户确认后应用才会覆盖计划。",
-    "输出必须是纯 JSON，不要 Markdown，不要代码块。",
+    "输出必须是一个可以被 JSON.parse 直接解析的单层 JSON 对象，不要 Markdown，不要代码块，不要把 JSON 再作为字符串塞进 message/content 里。",
+    "message 只能放给用户看的自然语言短句；planPatch 必须是对象，不允许是字符串。",
     'JSON 格式：{"message":"给用户看的简短中文回复","planPatch":{"summary":"修改摘要","scope":"day|week","changes":[{"date":"YYYY-MM-DD","after":{"title":"训练标题","kind":"recovery|z2|aerobic|sweetspot|threshold|rest","durationMinutes":60,"durationLabel":"60分钟","powerRange":[110,125],"segments":[{"name":"热身","durationMinutes":10,"targetPowerRange":[90,110]},{"name":"主训练","durationMinutes":8,"targetPowerRange":[155,162],"repeat":3,"recoveryMinutes":4,"recoveryPowerRange":[85,100]},{"name":"冷身","durationMinutes":10,"targetPowerRange":[85,100]}],"rideDetails":"骑行说明","exercises":[{"name":"动作","sets":3,"reps":"8-12次"}],"strengthDurationLabel":"20-25分钟","notes":"备注","nutrition":"饮食提示"},"reason":"为什么这么改"}]}}}',
+    "正确示例：{\"message\":\"建议今晚保守低Z2。\",\"planPatch\":{\"summary\":\"把今晚改为低Z2\",\"scope\":\"day\",\"changes\":[{\"date\":\"2026-05-25\",\"after\":{\"title\":\"低Z2骑\",\"kind\":\"z2\",\"durationMinutes\":75,\"powerRange\":[95,115]},\"reason\":\"近期负荷偏高\"}]}}}",
+    "错误示例：{\"message\":\"{\\\"message\\\":\\\"...\\\",\\\"planPatch\\\":{...}}\"}。不要这样返回。",
     "如果没有计划修改，省略 planPatch。",
     "当前用户目标：",
     settings.goalText?.trim() || "目标：减脂 + 提升骑行功率",
@@ -549,7 +552,7 @@ export async function requestAiCoachChat({
     prompt,
     temperature: 0.35,
     system:
-      "你是克制的训练顾问。回答要短，计划修改必须放在结构化 planPatch 中；不确定时先说明假设和风险。",
+      "你是克制的训练顾问。必须只返回可 JSON.parse 的单层 JSON 对象；回答要短，计划修改必须放在结构化 planPatch 对象中；不确定时先说明假设和风险。",
   });
 
   return parseAiCoachReply(content, weekPlans);
@@ -659,9 +662,7 @@ function parseAiCoachReply(content: string, weekPlans: PlanDay[]): AiCoachReply 
     };
   }
 
-  const record = Array.isArray(parsed)
-    ? ({ message: "", planPatch: { changes: parsed } } as Record<string, unknown>)
-    : (parsed as Record<string, unknown>);
+  const record = normalizeAiCoachRecord(parsed);
   const message =
     stringValue(record.message) ||
     stringValue(record.reply) ||
@@ -700,11 +701,43 @@ function parseAiCoachReply(content: string, weekPlans: PlanDay[]): AiCoachReply 
   };
 }
 
+function normalizeAiCoachRecord(parsed: unknown): Record<string, unknown> {
+  if (Array.isArray(parsed)) {
+    return { message: "", planPatch: { changes: parsed } };
+  }
+  const record = asRecord(parsed) ?? {};
+  const nestedContent = extractNestedJsonRecord(
+    record.content ?? record.message ?? record.reply,
+  );
+  if (nestedContent) {
+    return {
+      ...record,
+      ...nestedContent,
+      message:
+        stringValue(nestedContent.message) ||
+        stringValue(record.message) ||
+        stringValue(record.reply) ||
+        stringValue(record.content),
+    };
+  }
+  return record;
+}
+
+function extractNestedJsonRecord(value: unknown) {
+  if (typeof value !== "string") return undefined;
+  const parsed = extractJson(value);
+  return asRecord(parsed);
+}
+
 function sanitizePatchChange(input: unknown, weekPlans: PlanDay[]) {
   const record = asRecord(input);
   if (!record) return undefined;
   const date = stringValue(record.date);
-  const before = weekPlans.find((plan) => plan.date === date);
+  if (!date) return undefined;
+  const before = weekPlans.find((plan) => plan.date === date) ?? {
+    ...weekPlans[0],
+    date,
+  };
   if (!before) return undefined;
   const after = sanitizeAiPlanDay(record.after ?? record.plan ?? record, before);
   if (!after) return undefined;

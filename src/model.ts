@@ -106,6 +106,9 @@ export type FatigueLoadMetrics = {
   nextTraining: string;
   dataDays: number;
   loadDays: number;
+  syncedLoadDays?: number;
+  estimatedLoadDays?: number;
+  confidence?: "synced" | "mixed" | "estimated" | "insufficient";
 };
 
 export type FatigueAnalysisReport = {

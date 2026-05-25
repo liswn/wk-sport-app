@@ -2,14 +2,6 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { toPng } from "html-to-image";
 import {
-  ComposedChart,
-  ReferenceArea,
-  ReferenceLine,
-  ResponsiveContainer,
-  XAxis,
-  YAxis,
-} from "recharts";
-import {
   Button,
   Dialog,
   Input,
@@ -749,15 +741,12 @@ function TodayPage({
         {plan.rideDetails && <p className="note">{plan.rideDetails}</p>}
         {plan.exercises && <StrengthList plan={plan} />}
         {plan.notes && <p className="note">{plan.notes}</p>}
+        <NutritionPanel plan={plan} embedded />
       </div>
 
-      <ReadinessPanel insight={readiness} />
-
-      <NutritionPanel plan={plan} />
-
-      <div className="panel fatigue-panel">
+      <div className="panel training-status-panel">
         <div className="section-head">
-          <h3>AI 疲劳分析</h3>
+          <h3>训练状态</h3>
           <Button
             size="small"
             shape="round"
@@ -765,39 +754,48 @@ function TodayPage({
             loading={fatigueLoading}
             onClick={handleFatigueAnalysis}
           >
-            分析历史
+            AI分析
           </Button>
         </div>
-        <p className="muted">
-          汇总最近 42 天的实际完成、RPE、体感、Intervals.icu
-          摘要和身体趋势，再交给你配置的 AI 分析疲劳和恢复建议。
-        </p>
-        {fatigueError && <p className="sync-error">{fatigueError}</p>}
-        {lastFatigueReport && (
-          <>
-            <p className="muted-note">
-              最近分析：{formatReportTime(lastFatigueReport.generatedAt)}
-              <br></br>数据范围：{lastFatigueReport.rangeStart} 至{" "}
-              {lastFatigueReport.rangeEnd}
-            </p>
-            {lastFatigueReport.metrics && (
-              <FatigueMetricsGrid metrics={lastFatigueReport.metrics} />
-            )}
-            {lastFatigueReport.content && (
-              <pre>{lastFatigueReport.content}</pre>
-            )}
-          </>
-        )}
-      </div>
+        <ReadinessPanel insight={readiness} embedded />
 
-      <WeeklyReview
-        plans={plans}
-        bodyEntries={bodyEntries}
-        checkins={allCheckins}
-        trainingLogs={trainingLogs}
-        settings={settings}
-        templates={templates}
-      />
+        <div className="status-ai-section fatigue-panel">
+          <div className="section-head">
+            <h3>疲劳分析</h3>
+          </div>
+          <p className="muted">
+            汇总最近 42 天的实际完成、RPE、体感、Intervals.icu
+            摘要和身体趋势，再交给你配置的 AI 分析疲劳和恢复建议。
+          </p>
+          {fatigueError && <p className="sync-error">{fatigueError}</p>}
+          {lastFatigueReport && (
+            <>
+              <p className="muted-note">
+                最近分析：{formatReportTime(lastFatigueReport.generatedAt)}
+                <br></br>数据范围：{lastFatigueReport.rangeStart} 至{" "}
+                {lastFatigueReport.rangeEnd}
+              </p>
+              {lastFatigueReport.metrics && (
+                <FatigueMetricsGrid metrics={lastFatigueReport.metrics} />
+              )}
+              {lastFatigueReport.content && (
+                <pre>{lastFatigueReport.content}</pre>
+              )}
+            </>
+          )}
+        </div>
+
+        <WeeklyReview
+          plans={plans}
+          bodyEntries={bodyEntries}
+          checkins={allCheckins}
+          trainingLogs={trainingLogs}
+          activityAnalyses={activityAnalyses}
+          settings={settings}
+          templates={templates}
+          embedded
+        />
+      </div>
 
       <MonthlyReport
         plans={plans}
@@ -834,9 +832,17 @@ type ReadinessInsight = {
   latestAnalysis?: ActivityAnalysis;
 };
 
-function ReadinessPanel({ insight }: { insight: ReadinessInsight }) {
+function ReadinessPanel({
+  insight,
+  embedded = false,
+}: {
+  insight: ReadinessInsight;
+  embedded?: boolean;
+}) {
   return (
-    <div className={`panel readiness-panel readiness-${insight.level}`}>
+    <div
+      className={`${embedded ? "" : "panel"} readiness-panel readiness-${insight.level}`}
+    >
       <div className="readiness-head">
         <div>
           <h3>训练红绿灯</h3>
@@ -898,49 +904,130 @@ function PowerDistribution({
   const blocks = buildDistributionBlocks(segments, ftp);
   const totalMinutes = blocks.reduce((sum, block) => sum + block.minutes, 0);
   if (!blocks.length || totalMinutes <= 0) return null;
-  const maxPower = Math.max(settingsFtpLine(ftp), ...blocks.map((block) => block.power));
+  const maxPercent = Math.max(
+    130,
+    Math.ceil(
+      Math.max(...blocks.map((block) => powerPercent(block.power, ftp))) / 10,
+    ) * 10,
+  );
 
   return (
-    <div className="power-distribution" aria-label={`计划功率轮廓，${totalMinutes}分钟`}>
-      <div className="power-profile-chart recharts-power-profile">
-        <ResponsiveContainer width="100%" height={68}>
-          <ComposedChart
-            data={[
-              { minute: 0, power: 0 },
-              { minute: totalMinutes, power: maxPower },
-            ]}
-            margin={{ top: 4, right: 0, bottom: 0, left: 0 }}
-          >
-            <XAxis
-              dataKey="minute"
-              type="number"
-              domain={[0, totalMinutes]}
-              hide
-            />
-            <YAxis type="number" domain={[0, Math.ceil(maxPower * 1.08)]} hide />
-            <ReferenceLine
-              y={settingsFtpLine(ftp)}
-              stroke="rgba(85, 100, 96, 0.42)"
-              strokeDasharray="3 4"
-              ifOverflow="extendDomain"
-            />
-            {blocks.map((block) => (
-              <ReferenceArea
-                key={block.key}
-                x1={block.start}
-                x2={block.end}
-                y1={0}
-                y2={block.power}
-                fill={powerBlockColor(block.kind)}
-                fillOpacity={0.86}
-                stroke={powerBlockStroke(block.kind)}
-                strokeOpacity={0.9}
-              />
-            ))}
-          </ComposedChart>
-        </ResponsiveContainer>
-      </div>
+    <div
+      className="power-distribution"
+      aria-label={`计划功率轮廓，${totalMinutes}分钟`}
+    >
+      <PowerProfileSvg
+        blocks={blocks}
+        ftp={ftp}
+        totalMinutes={totalMinutes}
+        minPercent={30}
+        maxPercent={maxPercent}
+      />
     </div>
+  );
+}
+
+function PowerProfileSvg({
+  blocks,
+  ftp,
+  totalMinutes,
+  minPercent,
+  maxPercent,
+}: {
+  blocks: DistributionBlock[];
+  ftp: number;
+  totalMinutes: number;
+  minPercent: number;
+  maxPercent: number;
+}) {
+  const width = 700;
+  const height = 170;
+  const left = 46;
+  const right = 42;
+  const top = 12;
+  const bottom = 26;
+  const chartWidth = width - left - right;
+  const chartHeight = height - top - bottom;
+  const yFor = (percent: number) =>
+    top + ((maxPercent - percent) / (maxPercent - minPercent)) * chartHeight;
+  const xFor = (minute: number) => left + (minute / totalMinutes) * chartWidth;
+  const baseline = yFor(minPercent);
+  const ftpY = yFor(100);
+  const timeMarks = [0, 15, 30, 45, 60, totalMinutes].filter(
+    (value, index, list) =>
+      value <= totalMinutes && list.indexOf(value) === index,
+  );
+
+  return (
+    <svg
+      className="power-profile-chart"
+      viewBox={`0 0 ${width} ${height}`}
+      role="img"
+      aria-label="计划功率百分比图"
+      tabIndex={-1}
+      focusable="false"
+    >
+      <text x={14} y={yFor(130) + 4} className="power-axis-label">
+        130%
+      </text>
+      <text x={18} y={yFor(80) + 4} className="power-axis-label">
+        80%
+      </text>
+      <text x={18} y={yFor(30) + 4} className="power-axis-label">
+        30%
+      </text>
+      {[30, 80, 130].map((mark) => (
+        <line
+          key={mark}
+          x1={left}
+          x2={width - right}
+          y1={yFor(mark)}
+          y2={yFor(mark)}
+          className="power-grid-line"
+        />
+      ))}
+      <line
+        x1={left}
+        x2={width - right + 2}
+        y1={ftpY}
+        y2={ftpY}
+        className="power-ftp-line"
+      />
+      <text x={width - right + 8} y={ftpY + 4} className="power-ftp-label">
+        FTP
+      </text>
+      {blocks.map((block) => {
+        const x1 = xFor(block.start);
+        const x2 = xFor(block.end);
+        const y = yFor(powerPercent(block.power, ftp));
+        const points = [
+          `${x1},${baseline}`,
+          `${x1},${y}`,
+          `${x2},${y}`,
+          `${x2},${baseline}`,
+        ].join(" ");
+        return (
+          <polygon
+            key={block.key}
+            points={points}
+            className={`power-shape ${block.kind}`}
+          />
+        );
+      })}
+      {timeMarks.map((minute) => (
+        <text
+          key={minute}
+          x={xFor(minute)}
+          y={height - 5}
+          className="power-time-label"
+          textAnchor={
+            minute === 0 ? "start" : minute === totalMinutes ? "end" : "middle"
+          }
+        >
+          {minute}:00
+        </text>
+      ))}
+    </svg>
   );
 }
 
@@ -949,7 +1036,10 @@ function buildDistributionBlocks(segments: PlanSegment[], ftp: number) {
   return segments.flatMap((segment, segmentIndex) => {
     const repeat = Math.max(1, Math.round(segment.repeat ?? 1));
     const workMinutes = Math.max(0, Math.round(segment.durationMinutes ?? 0));
-    const recoveryMinutes = Math.max(0, Math.round(segment.recoveryMinutes ?? 0));
+    const recoveryMinutes = Math.max(
+      0,
+      Math.round(segment.recoveryMinutes ?? 0),
+    );
     const blocks: DistributionBlock[] = [];
     for (let index = 0; index < repeat; index += 1) {
       if (workMinutes > 0) {
@@ -989,7 +1079,7 @@ function buildDistributionBlocks(segments: PlanSegment[], ftp: number) {
 
 function labelPowerBlockKind(range: [number, number] | undefined, ftp: number) {
   if (!range || !ftp) return "pd-z2";
-  const ratio = ((range[0] + range[1]) / 2) / ftp;
+  const ratio = (range[0] + range[1]) / 2 / ftp;
   if (ratio < 0.62) return "pd-recovery";
   if (ratio < 0.78) return "pd-z2";
   if (ratio < 0.88) return "pd-tempo";
@@ -997,33 +1087,41 @@ function labelPowerBlockKind(range: [number, number] | undefined, ftp: number) {
   return "pd-threshold";
 }
 
-function averagePowerForRange(range: [number, number] | undefined, ftp: number) {
+function averagePowerForRange(
+  range: [number, number] | undefined,
+  ftp: number,
+) {
   if (!range) return Math.round(ftp * 0.55);
   return Math.round((range[0] + range[1]) / 2);
 }
 
-function settingsFtpLine(ftp: number) {
-  return Math.max(1, Math.round(ftp * 0.9));
+function powerPercent(power: number, ftp: number) {
+  if (!ftp) return 0;
+  return Math.round((power / ftp) * 100);
 }
 
 function powerBlockColor(kind: string) {
-  return {
-    "pd-recovery": "#78b8a9",
-    "pd-z2": "#75b85c",
-    "pd-tempo": "#c8ba61",
-    "pd-sweet": "#d87083",
-    "pd-threshold": "#df5f79",
-  }[kind] ?? "#75b85c";
+  return (
+    {
+      "pd-recovery": "#78b8a9",
+      "pd-z2": "#75b85c",
+      "pd-tempo": "#c8ba61",
+      "pd-sweet": "#d87083",
+      "pd-threshold": "#df5f79",
+    }[kind] ?? "#75b85c"
+  );
 }
 
 function powerBlockStroke(kind: string) {
-  return {
-    "pd-recovery": "#4f9587",
-    "pd-z2": "#579941",
-    "pd-tempo": "#a9943c",
-    "pd-sweet": "#b84f66",
-    "pd-threshold": "#bf415e",
-  }[kind] ?? "#579941";
+  return (
+    {
+      "pd-recovery": "#4f9587",
+      "pd-z2": "#579941",
+      "pd-tempo": "#a9943c",
+      "pd-sweet": "#b84f66",
+      "pd-threshold": "#bf415e",
+    }[kind] ?? "#579941"
+  );
 }
 
 function WeeklyReview({
@@ -1031,19 +1129,144 @@ function WeeklyReview({
   bodyEntries,
   checkins,
   trainingLogs,
+  activityAnalyses,
   settings,
   templates,
+  embedded = false,
 }: {
   plans: Record<string, PlanDay>;
   bodyEntries: Record<string, BodyEntry>;
   checkins: Record<string, Checkins>;
   trainingLogs: Record<string, TrainingLog>;
+  activityAnalyses: Record<string, ActivityAnalysis>;
   settings: SettingsState;
   templates: TrainingTemplate[];
+  embedded?: boolean;
 }) {
   const week = getWeekDays(new Date());
   const weekKeys = week.map(dateKey);
-  const planned = weekKeys.map((key) =>
+  const elapsedKeys = weekKeys.filter((key) => key <= todayKey());
+  const previousWeekKeys = getWeekDays(addDays(week[0], -7)).map(dateKey);
+  const previous = summarizeWeekSlice({
+    keys: previousWeekKeys,
+    plans,
+    checkins,
+    trainingLogs,
+    activityAnalyses,
+    settings,
+    templates,
+  });
+  const current = summarizeWeekSlice({
+    keys: elapsedKeys,
+    plans,
+    checkins,
+    trainingLogs,
+    activityAnalyses,
+    settings,
+    templates,
+  });
+  const weightTrend = buildWeightTrendText(bodyEntries);
+  const reviewText = buildWeeklyReviewText({
+    current,
+    previous,
+  });
+
+  return (
+    <div className={`${embedded ? "" : "panel"} weekly-review`}>
+      <div className="section-head">
+        <h3>本周训练对比</h3>
+        <span>截至 {formatMonthDay(new Date())}</span>
+      </div>
+      <p className="weekly-review-summary">{reviewText}</p>
+      <div className="review-grid">
+        <CompareMetric
+          label="训练完成"
+          current={`${current.done}/${current.trainingDays}`}
+          previous={`${previous.done}/${previous.trainingDays}`}
+        />
+        <CompareMetric
+          label="骑行公里"
+          current={`${current.distanceKm.toFixed(1)} km`}
+          previous={`${previous.distanceKm.toFixed(1)} km`}
+        />
+        <CompareMetric
+          label="实际时长"
+          current={
+            current.actualMinutes ? formatDuration(current.actualMinutes) : "-"
+          }
+          previous={
+            previous.actualMinutes
+              ? formatDuration(previous.actualMinutes)
+              : "-"
+          }
+        />
+        <CompareMetric
+          label="平均 RPE"
+          current={current.averageRpe}
+          previous={previous.averageRpe}
+        />
+      </div>
+      <div className="review-habit-grid">
+        <HabitCompare
+          label="蛋白"
+          current={current.protein}
+          previous={previous.protein}
+        />
+        <HabitCompare
+          label="晚餐"
+          current={current.dinner}
+          previous={previous.dinner}
+        />
+        <HabitCompare
+          label="早睡"
+          current={current.sleep}
+          previous={previous.sleep}
+        />
+      </div>
+      <div className="review-line">
+        <span>体重 7 日均值</span>
+        <strong>{weightTrend}</strong>
+      </div>
+    </div>
+  );
+}
+
+type WeekSliceSummary = {
+  done: number;
+  trainingDays: number;
+  actualMinutes: number;
+  distanceKm: number;
+  strength: number;
+  averageRpe: string;
+  protein: HabitSummary;
+  dinner: HabitSummary;
+  sleep: HabitSummary;
+};
+
+type HabitSummary = {
+  done: number;
+  total: number;
+  rate: number;
+};
+
+function summarizeWeekSlice({
+  keys,
+  plans,
+  checkins,
+  trainingLogs,
+  activityAnalyses,
+  settings,
+  templates,
+}: {
+  keys: string[];
+  plans: Record<string, PlanDay>;
+  checkins: Record<string, Checkins>;
+  trainingLogs: Record<string, TrainingLog>;
+  activityAnalyses: Record<string, ActivityAnalysis>;
+  settings: SettingsState;
+  templates: TrainingTemplate[];
+}): WeekSliceSummary {
+  const planned = keys.map((key) =>
     withCurrentPower(
       plans[key] ?? defaultPlanForDate(key, settings.ftp, templates),
       settings.ftp,
@@ -1051,16 +1274,31 @@ function WeeklyReview({
     ),
   );
   const trainingDays = planned.filter((plan) => plan.kind !== "rest").length;
-  const done = weekKeys.filter((key) => checkins[key]?.trainingDone).length;
+  const done = keys.filter((key) => {
+    const analysis = activityAnalyses[key];
+    return Boolean(
+      checkins[key]?.trainingDone ||
+      numeric(trainingLogs[key]?.actualMinutes) ||
+      analysis?.actualMinutes ||
+      (analysis?.activityCount && analysis.activityCount > 0),
+    );
+  }).length;
   const strength = planned.filter((plan, index) => {
-    const key = weekKeys[index];
+    const key = keys[index];
     return Boolean(plan.exercises?.length) && checkins[key]?.trainingDone;
   }).length;
-  const actualMinutes = weekKeys.reduce(
-    (sum, key) => sum + numeric(trainingLogs[key]?.actualMinutes),
-    0,
+  const actualMinutes = Math.round(
+    keys.reduce((sum, key) => {
+      const logged = numeric(trainingLogs[key]?.actualMinutes);
+      return sum + (logged || activityAnalyses[key]?.actualMinutes || 0);
+    }, 0),
   );
-  const rpeValues = weekKeys
+  const distanceKm = Number(
+    keys
+      .reduce((sum, key) => sum + (activityAnalyses[key]?.distanceKm ?? 0), 0)
+      .toFixed(1),
+  );
+  const rpeValues = keys
     .map((key) => numeric(trainingLogs[key]?.rpe))
     .filter((value) => value > 0);
   const averageRpe = rpeValues.length
@@ -1068,80 +1306,104 @@ function WeeklyReview({
         rpeValues.reduce((sum, value) => sum + value, 0) / rpeValues.length
       ).toFixed(1)
     : "-";
-  const habits = weekKeys.flatMap((key) => {
-    const item = checkins[key] ?? {};
-    return [item.proteinDone, item.dinnerControlled, item.earlySleep];
-  });
-  const habitRate = habits.length
-    ? Math.round((habits.filter(Boolean).length / habits.length) * 100)
-    : 0;
-  const weightTrend = buildWeightTrendText(bodyEntries);
-  const reviewText = buildWeeklyReviewText({
+
+  return {
     done,
     trainingDays,
     actualMinutes,
+    distanceKm,
     strength,
     averageRpe,
-    habitRate,
-  });
+    protein: summarizeHabit(keys, checkins, "proteinDone"),
+    dinner: summarizeHabit(keys, checkins, "dinnerControlled"),
+    sleep: summarizeHabit(keys, checkins, "earlySleep"),
+  };
+}
 
+function summarizeHabit(
+  keys: string[],
+  checkins: Record<string, Checkins>,
+  field: keyof Pick<
+    Checkins,
+    "proteinDone" | "dinnerControlled" | "earlySleep"
+  >,
+): HabitSummary {
+  const done = keys.filter((key) => Boolean(checkins[key]?.[field])).length;
+  const total = keys.length;
+  return {
+    done,
+    total,
+    rate: total ? Math.round((done / total) * 100) : 0,
+  };
+}
+
+function CompareMetric({
+  label,
+  current,
+  previous,
+}: {
+  label: string;
+  current: string;
+  previous: string;
+}) {
   return (
-    <div className="panel weekly-review">
-      <div className="section-head">
-        <h3>AI训练复盘周报</h3>
-        <span>
-          {formatMonthDay(week[0])} - {formatMonthDay(week[6])}
-        </span>
-      </div>
-      <p className="weekly-review-summary">{reviewText}</p>
-      <div className="review-grid">
-        <Metric label="训练完成" value={`${done}/${trainingDays}`} />
-        <Metric
-          label="实际时长"
-          value={actualMinutes ? `${actualMinutes} 分钟` : "-"}
-        />
-        <Metric label="力量次数" value={`${strength} 次`} />
-        <Metric label="平均 RPE" value={averageRpe} />
-      </div>
-      <div className="review-line">
-        <span>体重 7 日均值</span>
-        <strong>{weightTrend}</strong>
-      </div>
-      <div className="review-line">
-        <span>蛋白 / 晚餐 / 早睡</span>
-        <strong>{habitRate}%</strong>
-      </div>
+    <div className="compare-metric">
+      <span>{label}</span>
+      <strong>{current}</strong>
+      <em>上周 {previous}</em>
+    </div>
+  );
+}
+
+function HabitCompare({
+  label,
+  current,
+  previous,
+}: {
+  label: string;
+  current: HabitSummary;
+  previous: HabitSummary;
+}) {
+  return (
+    <div className="habit-compare">
+      <span>{label}</span>
+      <strong>{current.rate}%</strong>
+      <em>
+        {current.done}/{current.total} · 上周 {previous.rate}%
+      </em>
     </div>
   );
 }
 
 function buildWeeklyReviewText({
-  done,
-  trainingDays,
-  actualMinutes,
-  strength,
-  averageRpe,
-  habitRate,
+  current,
+  previous,
 }: {
-  done: number;
-  trainingDays: number;
-  actualMinutes: number;
-  strength: number;
-  averageRpe: string;
-  habitRate: number;
+  current: WeekSliceSummary;
+  previous: WeekSliceSummary;
 }) {
-  if (!trainingDays)
+  if (!current.trainingDays)
     return "本周以恢复为主，继续保持体重和执行记录，别为了打卡硬凑训练。";
-  if (!done && !actualMinutes) {
+  if (!current.done && !current.actualMinutes) {
     return "本周还没有记录到训练完成，建议先补齐实际训练、RPE 和体感，再看负荷趋势。";
   }
-  const completion = Math.round((done / trainingDays) * 100);
+  const completion = Math.round((current.done / current.trainingDays) * 100);
+  const previousCompletion = previous.trainingDays
+    ? Math.round((previous.done / previous.trainingDays) * 100)
+    : 0;
+  const distanceDiff = current.distanceKm - previous.distanceKm;
+  const distanceText =
+    distanceDiff === 0
+      ? "骑行距离与上周接近"
+      : `骑行距离比上周${distanceDiff > 0 ? "多" : "少"} ${Math.abs(distanceDiff).toFixed(1)} km`;
   const rpeHint =
-    averageRpe !== "-" && Number(averageRpe) >= 7
+    current.averageRpe !== "-" && Number(current.averageRpe) >= 7
       ? "主观强度偏高，接下来优先保证恢复。"
       : "整体强度可控，继续看长期趋势。";
-  const strengthHint = strength ? `力量完成 ${strength} 次，` : "";
-  return `本周完成率 ${completion}%，${strengthHint}累计 ${actualMinutes || 0} 分钟，习惯执行 ${habitRate}%。${rpeHint}`;
+  const strengthHint = current.strength
+    ? `力量完成 ${current.strength} 次，`
+    : "";
+  return `本周截至今天完成率 ${completion}%（上周 ${previousCompletion}%），${strengthHint}${distanceText}，累计 ${current.actualMinutes || 0} 分钟。${rpeHint}`;
 }
 
 type MonthlyReportStats = {
@@ -1241,7 +1503,7 @@ function MonthlyReport({
 
   return (
     <>
-      <div className="panel monthly-report">
+      <div className="panel monthly-report monthly-report-entry">
         <div className="section-head">
           <h3>训练月报</h3>
           <span>{stats.monthLabel}</span>
@@ -1396,15 +1658,32 @@ function ReportMetricValue({
   );
 }
 
-function NutritionPanel({ plan }: { plan: PlanDay }) {
+function NutritionPanel({
+  plan,
+  embedded = false,
+}: {
+  plan: PlanDay;
+  embedded?: boolean;
+}) {
   const tips = buildNutritionTips(plan);
 
   return (
-    <div className="panel nutrition-panel">
+    <div
+      className={`${embedded ? "today-nutrition" : "panel"} nutrition-panel`}
+    >
       <h3>今日推荐饮食</h3>
+      <p className="nutrition-context">
+        按今日计划：{plan.title}
+        {plan.durationMinutes
+          ? ` · ${plan.durationLabel ?? `${plan.durationMinutes}分钟`}`
+          : ""}
+      </p>
       <div className="nutrition-list">
         {tips.map((tip) => (
-          <div key={tip.label}>
+          <div
+            key={tip.label}
+            className={tip.label === "计划提示" ? "primary" : ""}
+          >
             <span>{tip.label}</span>
             <strong>{tip.value}</strong>
           </div>
@@ -2056,7 +2335,9 @@ function PlanPage({
         lastFatigueReport={lastFatigueReport}
         onSession={onAiCoachSession}
         onApplyPatch={(patch) => {
-          onWeekPlansReplace(patch.changes.map((change) => change.after));
+          for (const change of patch.changes) {
+            onPlanChange(change.date, change.after);
+          }
           setAiStatus("已应用 AI 咨询里的计划修改，实际完成记录保持不变。");
         }}
         onClose={() => setCoachOpen(false)}
@@ -2091,9 +2372,7 @@ function PlanPage({
                   theme={isDone ? "primary" : "default"}
                   variant={isDone ? "base" : "outline"}
                   className={isDone ? "done" : ""}
-                  onClick={() =>
-                    onTrainingDone(key, !isDone)
-                  }
+                  onClick={() => onTrainingDone(key, !isDone)}
                   aria-pressed={isDone}
                   icon={<Check size={15} />}
                 >
@@ -2601,7 +2880,9 @@ function TrainingCoachSheet({
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [deleteMessageId, setDeleteMessageId] = useState("");
   const messageListRef = useRef<HTMLDivElement | null>(null);
+  const longPressTimer = useRef<number | undefined>(undefined);
   const messages = session?.messages ?? [];
   const pendingPatch = session?.pendingPatch?.appliedAt
     ? undefined
@@ -2702,11 +2983,27 @@ function TrainingCoachSheet({
     saveSession(messages, undefined);
   };
 
+  const deleteMessage = (messageId: string) => {
+    saveSession(messages.filter((message) => message.id !== messageId));
+  };
+
+  const startMessagePress = (messageId: string) => {
+    window.clearTimeout(longPressTimer.current);
+    longPressTimer.current = window.setTimeout(() => {
+      setDeleteMessageId(messageId);
+    }, 560);
+  };
+
+  const cancelMessagePress = () => {
+    window.clearTimeout(longPressTimer.current);
+  };
+
   return (
     <Popup
       visible={visible}
       placement="bottom"
       closeOnOverlayClick
+      zIndex={1500}
       onClose={onClose}
     >
       <div className="coach-sheet">
@@ -2741,7 +3038,14 @@ function TrainingCoachSheet({
         <div className="coach-messages" ref={messageListRef}>
           {messages.length ? (
             messages.map((message) => (
-              <div key={message.id} className={`coach-message ${message.role}`}>
+              <div
+                key={message.id}
+                className={`coach-message ${message.role}`}
+                onPointerDown={() => startMessagePress(message.id)}
+                onPointerUp={cancelMessagePress}
+                onPointerCancel={cancelMessagePress}
+                onPointerLeave={cancelMessagePress}
+              >
                 <p>{message.content}</p>
               </div>
             ))
@@ -2823,6 +3127,20 @@ function TrainingCoachSheet({
           </Button>
         </div>
       </div>
+      <Dialog
+        visible={Boolean(deleteMessageId)}
+        title="删除这条消息？"
+        content="删除后，这条消息不会再作为下次 AI 咨询的上下文。"
+        cancelBtn="取消"
+        confirmBtn="删除"
+        zIndex={2000}
+        onClose={() => setDeleteMessageId("")}
+        onCancel={() => setDeleteMessageId("")}
+        onConfirm={() => {
+          deleteMessage(deleteMessageId);
+          setDeleteMessageId("");
+        }}
+      />
     </Popup>
   );
 }
