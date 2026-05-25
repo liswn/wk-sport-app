@@ -424,7 +424,7 @@ export async function requestAiTrainingRecommendation({
     recovery: "恢复调整",
   }[settings.goalFocus ?? "balanced"];
   const prompt = [
-    "你是一个偏保守的骑行训练助手。请基于用户最近的训练分析摘要，为下一周给出训练计划和饮食建议。",
+    "你是一个偏保守的骑行训练助手。请基于用户最近的训练分析摘要，为从今天开始连续 7 天给出训练计划和饮食建议。",
     "用户当前目标配置：",
     settings.goalText?.trim() || "目标：减脂 + 提升骑行功率",
     "策略倾向：" + strategyLabel,
@@ -433,8 +433,8 @@ export async function requestAiTrainingRecommendation({
     "要求：中文，克制，不要建议过度训练；如果数据不足，要明确说明。",
     "输出必须是纯 JSON，不要 Markdown，不要代码块，不要额外解释。",
     'JSON 格式：{"summary":"给用户看的简短说明","days":[{"date":"YYYY-MM-DD","title":"训练标题","kind":"recovery|z2|aerobic|sweetspot|threshold|rest","durationMinutes":60,"durationLabel":"60分钟","powerRange":[110,125],"segments":[{"name":"热身","durationMinutes":10,"targetPowerRange":[90,110]},{"name":"甜区主训练","durationMinutes":8,"targetPowerRange":[155,162],"repeat":3,"recoveryMinutes":4,"recoveryPowerRange":[85,100],"notes":"组间轻松骑"},{"name":"冷身","durationMinutes":10,"targetPowerRange":[85,100]}],"rideDetails":"骑行说明","exercises":[{"name":"动作","sets":3,"reps":"8-12次"}],"strengthDurationLabel":"20-25分钟","notes":"备注","nutrition":"饮食提示"}]}',
-    "days 必须覆盖当前周 7 天，并且 date 必须使用当前周计划里的日期。骑行训练必须尽量给出 segments 表示热身、主训练、恢复、冷身；力量训练用 exercises 表示，可以和任意骑行类型组合；休息日可以不填 durationMinutes、powerRange 和 segments。",
-    "当前周计划：",
+    "days 必须覆盖目标 7 天，并且 date 必须使用目标计划里的日期。骑行训练必须尽量给出 segments 表示热身、主训练、恢复、冷身；力量训练用 exercises 表示，可以和任意骑行类型组合；休息日可以不填 durationMinutes、powerRange 和 segments。",
+    "目标 7 天当前计划：",
     JSON.stringify(
       weekPlans.map((plan) => ({
         date: plan.date,
@@ -514,8 +514,7 @@ export async function requestAiCoachChat({
   lastFatigueReport?: FatigueAnalysisReport;
 }): Promise<AiCoachReply> {
   const prompt = [
-    "你是这个本地训练记录应用里的“训练顾问”。只回答骑行、力量训练、恢复、训练饮食执行、身体趋势和训练计划相关问题。",
-    "如果用户问无关内容，message 只回复：这个窗口只处理训练计划、恢复和执行记录相关问题。",
+    "你是这个本地训练记录应用里的“训练顾问”。优先结合骑行、力量训练、恢复、训练饮食执行、身体趋势、同步配置和训练计划回答；如果问题超出你的能力，简短说明边界并尽量给出可执行的下一步。",
     "不要修改实际完成记录、打卡、体重、体脂、腰围、胸围、FTP、Intervals.icu 同步结果和历史训练日志。",
     "如果需要调整计划，只能通过 planPatch 给出可预览的计划修改；用户确认后应用才会覆盖计划。",
     "输出必须是纯 JSON，不要 Markdown，不要代码块。",
@@ -550,7 +549,7 @@ export async function requestAiCoachChat({
     prompt,
     temperature: 0.35,
     system:
-      "你是克制的训练顾问，只处理训练相关问题。回答要短，计划修改必须放在结构化 planPatch 中。",
+      "你是克制的训练顾问。回答要短，计划修改必须放在结构化 planPatch 中；不确定时先说明假设和风险。",
   });
 
   return parseAiCoachReply(content, weekPlans);

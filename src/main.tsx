@@ -4,6 +4,7 @@ import {
   Button,
   Dialog,
   Input,
+  Picker,
   Popup,
   Switch,
   TabBar,
@@ -111,6 +112,16 @@ registerSW({ immediate: true });
 
 type Tab = "today" | "plan" | "calendar" | "body" | "settings";
 type SettingsView = "main" | "integrations" | "templates" | "guide";
+type LocalDataClearKey =
+  | "plans"
+  | "bodyEntries"
+  | "checkins"
+  | "trainingLogs"
+  | "dayMemos"
+  | "activityAnalyses"
+  | "lastFatigueReport"
+  | "aiCoachSession"
+  | "trainingTemplates";
 type BeforeInstallPromptEvent = Event & {
   prompt: () => Promise<void>;
   userChoice: Promise<{ outcome: "accepted" | "dismissed"; platform: string }>;
@@ -172,6 +183,23 @@ const CHATGPT_MODEL_OPTIONS: PickerOption[] = [
     option.value as (typeof SUPPORTED_CHATGPT_MODELS)[number],
   ),
 );
+
+const DATA_CLEAR_LABELS: Record<LocalDataClearKey, string> = {
+  plans: "计划",
+  bodyEntries: "身体",
+  checkins: "打卡",
+  trainingLogs: "训练记录",
+  dayMemos: "备忘",
+  activityAnalyses: "训练分析",
+  lastFatigueReport: "疲劳分析",
+  aiCoachSession: "AI咨询",
+  trainingTemplates: "模板",
+};
+
+const POWER_WATT_OPTIONS: PickerOption[] = Array.from({ length: 401 }, (_, index) => ({
+  label: `${index}W`,
+  value: String(index),
+}));
 
 function App() {
   const [ready, setReady] = useState(false);
@@ -305,6 +333,38 @@ function App() {
     const exportedAt = new Date().toISOString();
     downloadJson(await exportData(), label);
     setSettings((current) => ({ ...current, lastBackupAt: exportedAt }));
+  };
+
+  const clearLocalDataItem = (key: LocalDataClearKey) => {
+    switch (key) {
+      case "plans":
+        setPlans({});
+        break;
+      case "bodyEntries":
+        setBodyEntries({});
+        break;
+      case "checkins":
+        setCheckins({});
+        break;
+      case "trainingLogs":
+        setTrainingLogs({});
+        break;
+      case "dayMemos":
+        setDayMemos({});
+        break;
+      case "activityAnalyses":
+        setActivityAnalyses({});
+        break;
+      case "lastFatigueReport":
+        setLastFatigueReport(undefined);
+        break;
+      case "aiCoachSession":
+        setAiCoachSession(undefined);
+        break;
+      case "trainingTemplates":
+        setTrainingTemplates(defaultTrainingTemplates);
+        break;
+    }
   };
 
   const nav = [
@@ -456,6 +516,7 @@ function App() {
               templates={trainingTemplates}
               onSettings={setSettings}
               onTemplates={setTrainingTemplates}
+              onClearDataItem={clearLocalDataItem}
               onExport={() => handleExport()}
               onImport={async (file) => {
                 await handleExport("before-import");
@@ -1213,6 +1274,15 @@ function PlanPage({
     );
   });
 
+  const recommendationPlans = Array.from({ length: 7 }, (_, index) => {
+    const key = dateKey(addDays(new Date(), index));
+    return withCurrentPower(
+      plans[key] ?? defaultPlanForDate(key, settings.ftp, templates),
+      settings.ftp,
+      templates,
+    );
+  });
+
   useEffect(() => {
     setAiError("");
     setAiStatus("");
@@ -1230,7 +1300,7 @@ function PlanPage({
       );
       const recommendation = await requestAiTrainingRecommendation({
         settings,
-        weekPlans,
+        weekPlans: recommendationPlans,
         analyses: recentKeys
           .map((key) => activityAnalyses[key])
           .filter(Boolean),
@@ -1247,7 +1317,7 @@ function PlanPage({
   const handleApplyAiPlans = () => {
     if (!aiRecommendation?.plans.length) return;
     onWeekPlansReplace(aiRecommendation.plans);
-    setAiStatus("已按预览覆盖本周计划，实际完成记录保持不变。");
+    setAiStatus("已按预览覆盖今天起 7 天的计划，实际完成记录保持不变。");
     setAiRecommendation(null);
   };
 
@@ -1339,7 +1409,7 @@ function PlanPage({
         </div>
         <p className="muted">
           使用最近 28 天的训练摘要分析和手动完成记录，请求你在设置里配置的 AI
-          接口生成训练与饮食建议。
+          接口生成从今天开始连续 7 天的训练与饮食建议。
         </p>
         {aiError && <p className="sync-error">{aiError}</p>}
         {aiStatus && <p className="sync-success">{aiStatus}</p>}
@@ -1732,13 +1802,11 @@ function PlanSegmentEditor({
             </label>
             <label>
               目标功率
-              <Input
-                value={formatPowerRangeInput(segment.targetPowerRange)}
-                placeholder="155-162"
-                onChange={(value) =>
-                  updateSegment(index, {
-                    targetPowerRange: parsePowerRangeInput(String(value)),
-                  })
+              <PowerRangePickerField
+                value={segment.targetPowerRange}
+                placeholder="选择目标功率区间"
+                onChange={(targetPowerRange) =>
+                  updateSegment(index, { targetPowerRange })
                 }
               />
             </label>
@@ -1768,13 +1836,11 @@ function PlanSegmentEditor({
             </label>
             <label className="segment-field-wide">
               恢复功率
-              <Input
-                value={formatPowerRangeInput(segment.recoveryPowerRange)}
-                placeholder="85-100"
-                onChange={(value) =>
-                  updateSegment(index, {
-                    recoveryPowerRange: parsePowerRangeInput(String(value)),
-                  })
+              <PowerRangePickerField
+                value={segment.recoveryPowerRange}
+                placeholder="选择恢复功率区间"
+                onChange={(recoveryPowerRange) =>
+                  updateSegment(index, { recoveryPowerRange })
                 }
               />
             </label>
@@ -1827,26 +1893,71 @@ function PlanSegmentList({
   );
 }
 
+function PowerRangePickerField({
+  value,
+  placeholder,
+  onChange,
+}: {
+  value?: [number, number];
+  placeholder: string;
+  onChange: (range: [number, number] | undefined) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const display = value ? `${value[0]}-${value[1]}W` : placeholder;
+  const lower = Math.max(0, Math.min(value?.[0] ?? 90, 400));
+  const upper = Math.max(0, Math.min(value?.[1] ?? Math.max(lower, 120), 400));
+
+  return (
+    <div className="power-range-field">
+      <button type="button" onClick={() => setOpen(true)}>
+        <strong className={value ? "" : "placeholder"}>{display}</strong>
+        <em>选择</em>
+      </button>
+      {value && (
+        <button
+          type="button"
+          className="power-range-clear"
+          aria-label="清空功率区间"
+          onClick={() => onChange(undefined)}
+        >
+          清空
+        </button>
+      )}
+      <Popup
+        visible={open}
+        placement="bottom"
+        closeOnOverlayClick
+        onClose={() => setOpen(false)}
+      >
+        <Picker
+          title="选择功率区间"
+          columns={[POWER_WATT_OPTIONS, POWER_WATT_OPTIONS]}
+          value={[String(lower), String(Math.max(lower, upper))]}
+          cancelBtn="取消"
+          confirmBtn="确定"
+          onCancel={() => setOpen(false)}
+          onConfirm={(nextValue) => {
+            const first = Number(nextValue[0]);
+            const second = Number(nextValue[1]);
+            if (!Number.isFinite(first) || !Number.isFinite(second)) {
+              onChange(undefined);
+            } else {
+              onChange([
+                Math.round(Math.min(first, second)),
+                Math.round(Math.max(first, second)),
+              ]);
+            }
+            setOpen(false);
+          }}
+        />
+      </Popup>
+    </div>
+  );
+}
+
 function optionalNumber(value: string | number) {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
-}
-
-function formatPowerRangeInput(range?: [number, number]) {
-  return range ? `${range[0]}-${range[1]}` : "";
-}
-
-function parsePowerRangeInput(value: string): [number, number] | undefined {
-  const matches = value
-    .replace(/[wW瓦]/g, "")
-    .match(/\d+(?:\.\d+)?/g)
-    ?.map((item) => Number(item))
-    .filter((item) => Number.isFinite(item));
-  if (!matches || matches.length < 2) return undefined;
-  return [
-    Math.round(Math.min(matches[0], matches[1])),
-    Math.round(Math.max(matches[0], matches[1])),
-  ];
 }
 
 function TrainingCoachSheet({
@@ -1883,6 +1994,7 @@ function TrainingCoachSheet({
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const messageListRef = useRef<HTMLDivElement | null>(null);
   const messages = session?.messages ?? [];
   const pendingPatch = session?.pendingPatch?.appliedAt
     ? undefined
@@ -1905,27 +2017,19 @@ function TrainingCoachSheet({
     });
   };
 
-  const appendLocalReply = (question: string, content: string) => {
-    saveSession([
-      ...messages,
-      createChatMessage("user", question),
-      createChatMessage("assistant", content),
-    ]);
-  };
+  useEffect(() => {
+    if (!visible) return;
+    window.setTimeout(() => {
+      const node = messageListRef.current;
+      if (node) node.scrollTop = node.scrollHeight;
+    }, 40);
+  }, [visible, messages.length, loading, pendingPatch?.id]);
 
   const sendQuestion = async (value?: string) => {
     const question = (value ?? input).trim();
     if (!question || loading) return;
     setInput("");
     setError("");
-
-    if (!isTrainingRelatedQuestion(question)) {
-      appendLocalReply(
-        question,
-        "这个窗口只处理训练计划、恢复、骑行、力量和执行记录相关问题。",
-      );
-      return;
-    }
 
     const userMessage = createChatMessage("user", question);
     const nextMessages = [...messages, userMessage];
@@ -1947,7 +2051,7 @@ function TrainingCoachSheet({
       const reply = await requestAiCoachChat({
         settings,
         question,
-        messages,
+        messages: nextMessages,
         weekPlans,
         analyses: recentKeys
           .map((key) => activityAnalyses[key])
@@ -2002,7 +2106,7 @@ function TrainingCoachSheet({
         <div className="coach-head">
           <div>
             <h3>训练顾问</h3>
-            <p>只聊训练计划、恢复、骑行、力量和执行记录</p>
+            <p>会结合你的本地训练、身体趋势和最近对话给建议</p>
           </div>
           <Button
             size="small"
@@ -2027,7 +2131,7 @@ function TrainingCoachSheet({
           ))}
         </div>
 
-        <div className="coach-messages">
+        <div className="coach-messages" ref={messageListRef}>
           {messages.length ? (
             messages.map((message) => (
               <div key={message.id} className={`coach-message ${message.role}`}>
@@ -2097,7 +2201,7 @@ function TrainingCoachSheet({
         <div className="coach-input">
           <Textarea
             value={input}
-            placeholder="只询问训练计划、恢复、骑行、力量或饮食执行..."
+            placeholder="例如：帮我看下这周怎么调整，或者解释某个训练安排..."
             autosize={{ minRows: 1, maxRows: 4 }}
             onChange={(value) => setInput(String(value))}
           />
@@ -2362,6 +2466,7 @@ function SettingsPage({
   templates,
   onSettings,
   onTemplates,
+  onClearDataItem,
   onExport,
   onImport,
   onClear,
@@ -2378,6 +2483,7 @@ function SettingsPage({
   templates: TrainingTemplate[];
   onSettings: (settings: SettingsState) => void;
   onTemplates: (templates: TrainingTemplate[]) => void;
+  onClearDataItem: (key: LocalDataClearKey) => void;
   onExport: () => void;
   onImport: (file: File) => void;
   onClear: () => void;
@@ -2385,6 +2491,13 @@ function SettingsPage({
   const [selectedId, setSelectedId] = useState(templates[0]?.id ?? "");
   const [view, setView] = useState<SettingsView>("main");
   const [clearDialogStep, setClearDialogStep] = useState<0 | 1 | 2>(0);
+  const [clearDataKey, setClearDataKey] = useState<LocalDataClearKey | null>(
+    null,
+  );
+  const settingsScrollPositions = useRef<Partial<Record<SettingsView, number>>>(
+    {},
+  );
+  const previousSettingsView = useRef<SettingsView>(view);
   const selected =
     templates.find((template) => template.id === selectedId) ?? templates[0];
 
@@ -2393,6 +2506,17 @@ function SettingsPage({
       setSelectedId(templates[0]?.id ?? "");
     }
   }, [selectedId, templates]);
+
+  useEffect(() => {
+    const previous = previousSettingsView.current;
+    if (previous === view) return;
+    settingsScrollPositions.current[previous] = window.scrollY;
+    previousSettingsView.current = view;
+    const nextPosition = settingsScrollPositions.current[view] ?? 0;
+    window.setTimeout(() => {
+      window.scrollTo({ top: nextPosition, behavior: "auto" });
+    }, 0);
+  }, [view]);
 
   const updateTemplate = (patch: Partial<TrainingTemplate>) => {
     if (!selected) return;
@@ -2469,6 +2593,12 @@ function SettingsPage({
     }
     setClearDialogStep(0);
     await onClear();
+  };
+
+  const handleClearDataItem = () => {
+    if (!clearDataKey) return;
+    onClearDataItem(clearDataKey);
+    setClearDataKey(null);
   };
 
   return (
@@ -2920,6 +3050,7 @@ function SettingsPage({
             lastFatigueReport={lastFatigueReport}
             aiCoachSession={aiCoachSession}
             templates={templates}
+            onClearItem={setClearDataKey}
           />
           <div className="action-list">
             <Button
@@ -2974,6 +3105,26 @@ function SettingsPage({
         onClose={() => setClearDialogStep(0)}
         onCancel={() => setClearDialogStep(0)}
         onConfirm={handleClearConfirm}
+      />
+      <Dialog
+        visible={Boolean(clearDataKey)}
+        title={`清理${clearDataKey ? DATA_CLEAR_LABELS[clearDataKey] : ""}？`}
+        content={
+          <div className="dialog-copy">
+            <p>
+              {clearDataKey === "trainingTemplates"
+                ? "这会把训练模板恢复为默认模板，不会删除已经写入到日计划里的内容。"
+                : `这会只清理“${
+                    clearDataKey ? DATA_CLEAR_LABELS[clearDataKey] : ""
+                  }”这一项本地数据，其它数据会保留。`}
+            </p>
+          </div>
+        }
+        cancelBtn="取消"
+        confirmBtn="确认清理"
+        onClose={() => setClearDataKey(null)}
+        onCancel={() => setClearDataKey(null)}
+        onConfirm={handleClearDataItem}
       />
     </section>
   );
@@ -3227,6 +3378,7 @@ function LocalDataSize({
   lastFatigueReport,
   aiCoachSession,
   templates,
+  onClearItem,
 }: {
   settings: SettingsState;
   plans: Record<string, PlanDay>;
@@ -3238,6 +3390,7 @@ function LocalDataSize({
   lastFatigueReport?: FatigueAnalysisReport;
   aiCoachSession?: AiCoachSession;
   templates: TrainingTemplate[];
+  onClearItem: (key: LocalDataClearKey) => void;
 }) {
   const snapshot = {
     schema: "wk-sport-app-v1",
@@ -3256,16 +3409,16 @@ function LocalDataSize({
     },
   };
   const bytes = new Blob([JSON.stringify(snapshot)]).size;
-  const rows = [
-    ["计划", countRecord(plans)],
-    ["身体", countRecord(bodyEntries)],
-    ["打卡", countRecord(checkins)],
-    ["训练记录", countRecord(trainingLogs)],
-    ["备忘", countRecord(dayMemos)],
-    ["训练分析", countRecord(activityAnalyses)],
-    ["疲劳分析", lastFatigueReport ? 1 : 0],
-    ["AI咨询", aiCoachSession?.messages.length ?? 0],
-    ["模板", templates.length],
+  const rows: Array<{ key: LocalDataClearKey; count: number; hint: string }> = [
+    { key: "plans", count: countRecord(plans), hint: "已编辑日计划" },
+    { key: "bodyEntries", count: countRecord(bodyEntries), hint: "体重身体记录" },
+    { key: "checkins", count: countRecord(checkins), hint: "每日执行打卡" },
+    { key: "trainingLogs", count: countRecord(trainingLogs), hint: "实际完成记录" },
+    { key: "dayMemos", count: countRecord(dayMemos), hint: "日历备忘" },
+    { key: "activityAnalyses", count: countRecord(activityAnalyses), hint: "Intervals 摘要" },
+    { key: "lastFatigueReport", count: lastFatigueReport ? 1 : 0, hint: "最后一次 AI 分析" },
+    { key: "aiCoachSession", count: aiCoachSession?.messages.length ?? 0, hint: "聊天消息" },
+    { key: "trainingTemplates", count: templates.length, hint: "模板库" },
   ];
 
   return (
@@ -3274,11 +3427,21 @@ function LocalDataSize({
         <span>本地数据量</span>
         <strong>{formatBytes(bytes)}</strong>
       </div>
-      <div className="data-size-grid">
-        {rows.map(([label, count]) => (
-          <div key={label}>
-            <span>{label}</span>
-            <strong>{count}</strong>
+      <div className="data-size-list">
+        {rows.map((row) => (
+          <div key={row.key}>
+            <span>{DATA_CLEAR_LABELS[row.key]}</span>
+            <strong>{row.count}</strong>
+            <em>{row.hint}</em>
+            <Button
+              size="small"
+              shape="round"
+              variant="outline"
+              disabled={row.count === 0}
+              onClick={() => onClearItem(row.key)}
+            >
+              清理
+            </Button>
           </div>
         ))}
       </div>
@@ -3623,55 +3786,6 @@ function createChatMessage(
     content,
     createdAt: new Date().toISOString(),
   };
-}
-
-function isTrainingRelatedQuestion(value: string) {
-  const text = value.trim().toLowerCase();
-  if (!text) return false;
-  const keywords = [
-    "训练",
-    "计划",
-    "练",
-    "不练",
-    "安排",
-    "调整",
-    "今天",
-    "明天",
-    "后天",
-    "本周",
-    "下周",
-    "降载",
-    "加量",
-    "骑",
-    "骑行",
-    "功率",
-    "ftp",
-    "tss",
-    "ctl",
-    "atl",
-    "tsb",
-    "疲劳",
-    "恢复",
-    "休息",
-    "z2",
-    "甜区",
-    "阈值",
-    "有氧",
-    "力量",
-    "rpe",
-    "心率",
-    "踏频",
-    "蛋白",
-    "饮食",
-    "晚餐",
-    "睡眠",
-    "体重",
-    "腰围",
-    "减脂",
-    "强度",
-    "间歇",
-  ];
-  return keywords.some((keyword) => text.includes(keyword));
 }
 
 function countRecord(record: Record<string, unknown>) {
