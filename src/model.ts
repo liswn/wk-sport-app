@@ -147,6 +147,20 @@ export type AiCoachSession = {
   updatedAt: string;
 };
 
+export type IgpsportSyncRecord = {
+  id: string;
+  date: string;
+  rideId: string;
+  title?: string;
+  startedAt?: string;
+  fileType?: "fit" | "gpx";
+  fileHash?: string;
+  intervalsActivityId?: string;
+  syncedAt: string;
+  status: "uploaded" | "duplicate" | "skipped" | "failed";
+  message?: string;
+};
+
 export type SettingsState = {
   ftp: number;
   heightCm?: string;
@@ -159,6 +173,11 @@ export type SettingsState = {
   aiEndpoint?: string;
   aiApiKey?: string;
   aiModel?: string;
+  igpsportUsername?: string;
+  igpsportPassword?: string;
+  igpsportAccessToken?: string;
+  igpsportRefreshToken?: string;
+  igpsportTokenExpiresAt?: string;
   lastBackupAt?: string;
 };
 
@@ -182,6 +201,7 @@ export type AppData = {
   lastFatigueReport?: FatigueAnalysisReport;
   aiCoachSession?: AiCoachSession;
   trainingTemplates: TrainingTemplate[];
+  igpsportSyncRecords: Record<string, IgpsportSyncRecord>;
 };
 
 export const DEFAULT_SETTINGS: SettingsState = {
@@ -192,7 +212,12 @@ export const DEFAULT_SETTINGS: SettingsState = {
   goalFocus: "balanced",
   intervalsApiBase: "https://intervals.icu/api/v1",
   aiEndpoint: "",
-  aiModel: DEFAULT_AI_MODEL
+  aiModel: DEFAULT_AI_MODEL,
+  igpsportUsername: "",
+  igpsportPassword: "",
+  igpsportAccessToken: "",
+  igpsportRefreshToken: "",
+  igpsportTokenExpiresAt: ""
 };
 
 const recoveryNutrition = "恢复/Z2：出门前可少吃，半根到1根香蕉即可。训练后补20-35g蛋白质，加适量主食。";

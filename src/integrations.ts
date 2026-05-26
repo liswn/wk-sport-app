@@ -7,6 +7,7 @@ import type {
   Exercise,
   FatigueAnalysisReport,
   FatigueLoadMetrics,
+  IgpsportSyncRecord,
   PlanDay,
   PlanSegment,
   SettingsState,
@@ -39,6 +40,29 @@ type IntervalsPlanEvent = {
   moving_time?: number;
   icu_training_load?: number;
   color?: string;
+};
+
+type IgpsportActivity = {
+  rideId?: string | number;
+  activityId?: string | number;
+  id?: string | number;
+  name?: string;
+  title?: string;
+  beginTime?: string;
+  startTime?: string;
+  start_time?: string;
+  distance?: number;
+  totalDistance?: number;
+};
+
+type IgpsportTokenData = {
+  access_token?: string;
+  accessToken?: string;
+  refresh_token?: string;
+  refreshToken?: string;
+  expires_in?: number;
+  expiresIn?: number;
+  token_type?: string;
 };
 
 export type AiTrainingRecommendation = {
@@ -167,6 +191,131 @@ export async function syncIntervalsRangeAnalysis({
   );
 }
 
+export type IgpsportDateSyncResult = {
+  settings: SettingsState;
+  syncRecords: Record<string, IgpsportSyncRecord>;
+  analysis: ActivityAnalysis;
+  message: string;
+};
+
+export async function syncIgpsportDateToIntervals({
+  settings,
+  date,
+  plan,
+  syncRecords,
+}: {
+  settings: SettingsState;
+  date: string;
+  plan: PlanDay;
+  syncRecords: Record<string, IgpsportSyncRecord>;
+}): Promise<IgpsportDateSyncResult> {
+  getIntervalsAthleteId(settings);
+  getIntervalsAuthHeader(settings);
+
+  let authenticatedSettings = await ensureIgpsportSession(settings);
+  let activities: IgpsportActivity[];
+  try {
+    activities = await fetchIgpsportActivities(authenticatedSettings, date);
+  } catch (error) {
+    if (!(error instanceof IgpsportUnauthorizedError)) throw error;
+    authenticatedSettings = await ensureIgpsportSession(authenticatedSettings, {
+      forceRenew: true,
+    });
+    activities = await fetchIgpsportActivities(authenticatedSettings, date);
+  }
+
+  const nextRecords = { ...syncRecords };
+  let uploaded = 0;
+  let duplicates = 0;
+  let skipped = 0;
+
+  for (const activity of activities) {
+    const rideId = getIgpsportRideId(activity);
+    if (!rideId) continue;
+    const key = `igpsport-${rideId}`;
+    const existing = nextRecords[key];
+    if (existing && ["uploaded", "duplicate", "skipped"].includes(existing.status)) {
+      skipped += 1;
+      continue;
+    }
+
+    let activityFile: IgpsportActivityFile;
+    try {
+      activityFile = await downloadIgpsportActivityFile(
+        authenticatedSettings,
+        rideId,
+      );
+    } catch (error) {
+      if (!(error instanceof IgpsportUnauthorizedError)) throw error;
+      authenticatedSettings = await ensureIgpsportSession(authenticatedSettings, {
+        forceRenew: true,
+      });
+      activityFile = await downloadIgpsportActivityFile(
+        authenticatedSettings,
+        rideId,
+      );
+    }
+    const fileHash = await digestActivityFile(activityFile.bytes);
+    const matchingHash = Object.values(nextRecords).find(
+      (record) =>
+        record.fileHash === fileHash &&
+        (record.status === "uploaded" || record.status === "duplicate"),
+    );
+    if (matchingHash) {
+      skipped += 1;
+      nextRecords[key] = buildIgpsportSyncRecord({
+        date,
+        rideId,
+        activity,
+        fileHash,
+        status: "skipped",
+        message: "同一活动文件已同步，已跳过。",
+        intervalsActivityId: matchingHash.intervalsActivityId,
+      });
+      continue;
+    }
+
+    const upload = await uploadFitToIntervals({
+      settings: authenticatedSettings,
+      rideId,
+      activityFile,
+    });
+    if (upload.duplicate) {
+      duplicates += 1;
+    } else {
+      uploaded += 1;
+    }
+    nextRecords[key] = buildIgpsportSyncRecord({
+      date,
+      rideId,
+      activity,
+      fileType: activityFile.type,
+      fileHash,
+      status: upload.duplicate ? "duplicate" : "uploaded",
+      message: upload.duplicate
+        ? "Intervals.icu 已存在该文件。"
+        : `${activityFile.type.toUpperCase()} 已上传到 Intervals.icu。`,
+      intervalsActivityId: upload.activityId,
+    });
+  }
+
+  const analysis = await syncIntervalsAnalysis({
+    settings: authenticatedSettings,
+    date,
+    plan,
+  });
+  const noRecords = activities.length === 0;
+  const message = noRecords
+    ? `${date} 在 iGPSPORT 没有可同步的训练记录。`
+    : `iGPSPORT 同步完成：上传 ${uploaded} 条，重复 ${duplicates} 条，跳过 ${skipped} 条。`;
+  return {
+    settings: authenticatedSettings,
+    syncRecords: nextRecords,
+    analysis,
+    message,
+  };
+}
+
 export async function pushIntervalsWeekPlan({
   settings,
   plans,
@@ -206,6 +355,369 @@ export async function pushIntervalsWeekPlan({
     requested: events.length,
     synced: returnedEvents.length || events.length,
     events: returnedEvents,
+  };
+}
+
+class IgpsportUnauthorizedError extends Error {}
+
+async function ensureIgpsportSession(
+  settings: SettingsState,
+  options: { forceRenew?: boolean } = {},
+) {
+  const expiresAt = settings.igpsportTokenExpiresAt
+    ? new Date(settings.igpsportTokenExpiresAt).getTime()
+    : 0;
+  if (
+    !options.forceRenew &&
+    settings.igpsportAccessToken?.trim() &&
+    (!expiresAt || expiresAt > Date.now() + 60_000)
+  ) {
+    return settings;
+  }
+
+  const refreshed = await refreshIgpsportAccount(settings).catch(() => undefined);
+  if (refreshed) return refreshed;
+
+  if (settings.igpsportUsername?.trim() && settings.igpsportPassword?.trim()) {
+    return loginIgpsportAccount({ settings });
+  }
+
+  throw new Error(
+    "iGPSPORT 登录已过期。没有找到可用的刷新接口或本地保存的密码，请到设置页重新登录。",
+  );
+}
+
+export async function loginIgpsportAccount({
+  settings,
+  password,
+}: {
+  settings: SettingsState;
+  password?: string;
+}) {
+  const username = settings.igpsportUsername?.trim();
+  const loginPassword = password ?? settings.igpsportPassword ?? "";
+  if (!username || !loginPassword) {
+    throw new Error("请先在设置里填写 iGPSPORT 账号和密码。");
+  }
+
+  const response = await fetch(
+    "https://prod.zh.igpsport.com/service/auth/account/login",
+    {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        appId: "igpsport-web",
+        username,
+        password: loginPassword,
+      }),
+    },
+  );
+  if (!response.ok) {
+    throw new Error(`iGPSPORT 登录失败：${response.status} ${response.statusText}`);
+  }
+  const payload = await response.json().catch(() => ({}));
+  const data = extractIgpsportTokenData(payload);
+  if (!getIgpsportAccessToken(data)) {
+    throw new Error("iGPSPORT 登录未返回 access_token，请检查账号或接口响应。");
+  }
+  return applyIgpsportTokenData(settings, data, {
+    password: loginPassword,
+  });
+}
+
+async function refreshIgpsportAccount(settings: SettingsState) {
+  const refreshToken = settings.igpsportRefreshToken?.trim();
+  if (!refreshToken) return undefined;
+
+  const base = "https://prod.zh.igpsport.com/service";
+  const requests = [
+    {
+      url: `${base}/auth/refresh`,
+      body: { refreshToken, appId: "igpsport-web" },
+    },
+    {
+      url: `${base}/auth/refresh`,
+      body: { refresh_token: refreshToken, appId: "igpsport-web" },
+    },
+    {
+      url: `${base}/auth/account/refresh`,
+      body: { refreshToken, appId: "igpsport-web" },
+    },
+    {
+      url: `${base}/auth/account/refresh`,
+      body: { refresh_token: refreshToken, appId: "igpsport-web" },
+    },
+  ];
+
+  for (const request of requests) {
+    try {
+      const response = await fetch(request.url, {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(request.body),
+      });
+      if (!response.ok) continue;
+      const payload = await response.json().catch(() => ({}));
+      const data = extractIgpsportTokenData(payload);
+      if (getIgpsportAccessToken(data)) {
+        return applyIgpsportTokenData(settings, data);
+      }
+    } catch {
+      // iGPSPORT has no public refresh docs. If a candidate endpoint is blocked
+      // or absent, fall back to encrypted-password login below.
+    }
+  }
+
+  return undefined;
+}
+
+function extractIgpsportTokenData(payload: unknown): IgpsportTokenData {
+  const record = payload && typeof payload === "object"
+    ? (payload as Record<string, unknown>)
+    : {};
+  const data = record.data && typeof record.data === "object"
+    ? (record.data as Record<string, unknown>)
+    : record;
+  return data as IgpsportTokenData;
+}
+
+function applyIgpsportTokenData(
+  settings: SettingsState,
+  data: IgpsportTokenData,
+  options: { password?: string } = {},
+) {
+  const accessToken = getIgpsportAccessToken(data);
+  if (!accessToken) return settings;
+  const refreshToken =
+    data.refresh_token?.trim() ||
+    data.refreshToken?.trim() ||
+    settings.igpsportRefreshToken ||
+    "";
+  const expiresIn = Number(data.expires_in ?? data.expiresIn);
+  const expiresAt = Number.isFinite(expiresIn)
+    ? new Date(Date.now() + expiresIn * 1000).toISOString()
+    : settings.igpsportTokenExpiresAt || "";
+
+  return {
+    ...settings,
+    igpsportPassword: options.password ?? settings.igpsportPassword ?? "",
+    igpsportAccessToken: accessToken,
+    igpsportRefreshToken: refreshToken,
+    igpsportTokenExpiresAt: expiresAt,
+  };
+}
+
+function getIgpsportAccessToken(data: IgpsportTokenData) {
+  return data.access_token?.trim() || data.accessToken?.trim() || "";
+}
+
+async function fetchIgpsportActivities(settings: SettingsState, date: string) {
+  const params = new URLSearchParams({
+    pageNo: "1",
+    pageSize: "100",
+    reqType: "0",
+    sort: "1",
+    sortType: "1",
+    beginTime: date,
+    endTime: date,
+  });
+  const payload = await fetchIgpsportJson(
+    settings,
+    `https://prod.zh.igpsport.com/service/web-gateway/web-analyze/activity/queryMyActivity?${params.toString()}`,
+  );
+  const data = payload?.data;
+  const activities =
+    (Array.isArray(data) && data) ||
+    (Array.isArray(data?.list) && data.list) ||
+    (Array.isArray(data?.records) && data.records) ||
+    (Array.isArray(data?.rows) && data.rows) ||
+    [];
+  return activities as IgpsportActivity[];
+}
+
+async function fetchIgpsportDownloadUrl(
+  settings: SettingsState,
+  rideId: string,
+) {
+  const payload = await fetchIgpsportJson(
+    settings,
+    `https://prod.zh.igpsport.com/service/web-gateway/web-analyze/activity/getDownloadUrl/${encodeURIComponent(rideId)}`,
+  );
+  const downloadUrl = typeof payload?.data === "string" ? payload.data : "";
+  if (!downloadUrl.trim()) {
+    throw new Error(`iGPSPORT 活动 ${rideId} 未返回 FIT 下载链接。`);
+  }
+  return downloadUrl;
+}
+
+async function fetchIgpsportJson(settings: SettingsState, url: string) {
+  const token = settings.igpsportAccessToken?.trim();
+  if (!token) throw new Error("iGPSPORT 尚未登录。");
+  const response = await fetch(url, {
+    headers: {
+      Accept: "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+  });
+  if (response.status === 401) throw new IgpsportUnauthorizedError();
+  if (!response.ok) {
+    throw new Error(`iGPSPORT 请求失败：${response.status} ${response.statusText}`);
+  }
+  const payload = await response.json().catch(() => ({}));
+  if (payload?.code !== undefined && payload.code !== 0) {
+    throw new Error(payload.message || "iGPSPORT 返回失败状态。");
+  }
+  return payload;
+}
+
+function getIgpsportRideId(activity: IgpsportActivity) {
+  const value = activity.rideId ?? activity.activityId ?? activity.id;
+  return value === undefined || value === null ? "" : String(value);
+}
+
+type IgpsportActivityFile = {
+  type: "fit" | "gpx";
+  bytes: ArrayBuffer;
+};
+
+async function downloadIgpsportActivityFile(
+  settings: SettingsState,
+  rideId: string,
+): Promise<IgpsportActivityFile> {
+  const fitUrl = await fetchIgpsportDownloadUrl(settings, rideId);
+  try {
+    return {
+      type: "fit",
+      bytes: await downloadIgpsportFile(settings, fitUrl),
+    };
+  } catch (error) {
+    if (error instanceof IgpsportUnauthorizedError) throw error;
+    return {
+      type: "gpx",
+      bytes: await downloadIgpsportFile(
+        settings,
+        `https://prod.zh.igpsport.com/service/web-gateway/web-analyze/activity/exportGpx/${encodeURIComponent(rideId)}`,
+      ),
+    };
+  }
+}
+
+async function downloadIgpsportFile(
+  settings: SettingsState,
+  downloadUrl: string,
+) {
+  const token = settings.igpsportAccessToken?.trim();
+  if (!token) throw new Error("iGPSPORT 尚未登录。");
+  let response: Response;
+  try {
+    response = await fetch(downloadUrl, {
+      headers: {
+        Accept: "application/octet-stream,*/*",
+        authorization: `Bearer ${token}`,
+      },
+    });
+  } catch (error) {
+    throw new Error(
+      "iGPSPORT 活动文件下载失败。FIT 链接可能被 OSS CORS 拦截；如果 GPX 接口也失败，请改为手动选择文件上传。",
+      { cause: error },
+    );
+  }
+  if (response.status === 401) throw new IgpsportUnauthorizedError();
+  if (!response.ok) {
+    throw new Error(`下载 iGPSPORT 活动文件失败：${response.status} ${response.statusText}`);
+  }
+  return response.arrayBuffer();
+}
+
+async function digestActivityFile(bytes: ArrayBuffer) {
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(digest), (byte) =>
+    byte.toString(16).padStart(2, "0"),
+  ).join("");
+}
+
+async function uploadFitToIntervals({
+  settings,
+  rideId,
+  activityFile,
+}: {
+  settings: SettingsState;
+  rideId: string;
+  activityFile: IgpsportActivityFile;
+}) {
+  const base = getIntervalsBase(settings);
+  const athleteId = getIntervalsAthleteId(settings);
+  const params = new URLSearchParams({ external_id: `igpsport-${rideId}` });
+  const formData = new FormData();
+  formData.append(
+    "file",
+    new File([activityFile.bytes], `igpsport-${rideId}.${activityFile.type}`, {
+      type: "application/octet-stream",
+    }),
+  );
+  const response = await fetch(
+    `${base}/athlete/${encodeURIComponent(athleteId)}/activities?${params.toString()}`,
+    {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        Authorization: getIntervalsAuthHeader(settings),
+      },
+      body: formData,
+    },
+  );
+  if (!response.ok) {
+    throw new Error(
+      `Intervals.icu 上传 ${activityFile.type.toUpperCase()} 失败：${response.status} ${response.statusText}`,
+    );
+  }
+  const payload = await response.json().catch(() => ({}));
+  return {
+    duplicate: response.status === 200,
+    activityId: String(
+      payload?.id ?? payload?.activity_id ?? payload?.activityId ?? "",
+    ),
+  };
+}
+
+function buildIgpsportSyncRecord({
+  date,
+  rideId,
+  activity,
+  fileHash,
+  fileType,
+  intervalsActivityId,
+  status,
+  message,
+}: {
+  date: string;
+  rideId: string;
+  activity: IgpsportActivity;
+  fileHash?: string;
+  fileType?: IgpsportSyncRecord["fileType"];
+  intervalsActivityId?: string;
+  status: IgpsportSyncRecord["status"];
+  message?: string;
+}): IgpsportSyncRecord {
+  return {
+    id: `igpsport-${rideId}`,
+    date,
+    rideId,
+    title: activity.title ?? activity.name,
+    startedAt:
+      activity.startTime ?? activity.beginTime ?? activity.start_time,
+    fileType,
+    fileHash,
+    intervalsActivityId: intervalsActivityId || undefined,
+    status,
+    message,
+    syncedAt: new Date().toISOString(),
   };
 }
 

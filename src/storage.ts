@@ -12,7 +12,13 @@ const STORE_NAME = "app";
 const DB_VERSION = 1;
 const APP_DATA_KEY = "data";
 const CRYPTO_KEY = "crypto-key";
-const SECRET_FIELDS = ["intervalsApiKey", "aiApiKey"] as const;
+const SECRET_FIELDS = [
+  "intervalsApiKey",
+  "aiApiKey",
+  "igpsportPassword",
+  "igpsportAccessToken",
+  "igpsportRefreshToken",
+] as const;
 
 type SecretField = (typeof SECRET_FIELDS)[number];
 type EncryptedSecret = {
@@ -74,7 +80,7 @@ export async function exportData() {
     encryption: {
       version: 1,
       fields: SECRET_FIELDS,
-      note: "API keys are encrypted with this browser's local key. Importing on another browser will keep other data but requires re-entering API keys.",
+      note: "API keys and tokens are encrypted with this browser's local key. Importing on another browser will keep other data but requires re-entering secrets.",
     },
     data: await encryptAppData(data)
   };
@@ -123,7 +129,8 @@ function normalizeData(data?: Partial<AppData>): AppData {
           messages: (data.aiCoachSession.messages ?? []).slice(-50),
         }
       : undefined,
-    trainingTemplates: mergeTrainingTemplates(data?.trainingTemplates)
+    trainingTemplates: mergeTrainingTemplates(data?.trainingTemplates),
+    igpsportSyncRecords: data?.igpsportSyncRecords ?? {}
   };
 }
 

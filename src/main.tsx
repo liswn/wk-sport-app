@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { toPng } from "html-to-image";
 import {
@@ -56,6 +56,7 @@ import {
   DayMemo,
   type FatigueAnalysisReport,
   type FatigueLoadMetrics,
+  IgpsportSyncRecord,
   type PlanSegment,
   PlanDay,
   SettingsState,
@@ -76,10 +77,12 @@ import type {
 } from "./integrations";
 import {
   parseAiCoachReply,
+  loginIgpsportAccount,
   requestAiCoachChat,
   requestAiFatigueAnalysis,
   requestAiTrainingRecommendation,
   pushIntervalsWeekPlan,
+  syncIgpsportDateToIntervals,
   syncIntervalsAnalysis,
   syncIntervalsRangeAnalysis,
 } from "./integrations";
@@ -122,7 +125,8 @@ type LocalDataClearKey =
   | "activityAnalyses"
   | "lastFatigueReport"
   | "aiCoachSession"
-  | "trainingTemplates";
+  | "trainingTemplates"
+  | "igpsportSyncRecords";
 type BeforeInstallPromptEvent = Event & {
   prompt: () => Promise<void>;
   userChoice: Promise<{ outcome: "accepted" | "dismissed"; platform: string }>;
@@ -195,6 +199,7 @@ const DATA_CLEAR_LABELS: Record<LocalDataClearKey, string> = {
   lastFatigueReport: "疲劳分析",
   aiCoachSession: "AI咨询",
   trainingTemplates: "模板",
+  igpsportSyncRecords: "iGPSPORT",
 };
 
 const POWER_WATT_OPTIONS: PickerOption[] = Array.from(
@@ -236,6 +241,9 @@ function App() {
   const [trainingTemplates, setTrainingTemplates] = useState<
     TrainingTemplate[]
   >(defaultTrainingTemplates);
+  const [igpsportSyncRecords, setIgpsportSyncRecords] = useState<
+    Record<string, IgpsportSyncRecord>
+  >({});
   const [weekStart, setWeekStart] = useState(() => getWeekDays(new Date())[0]);
   const scrollPositions = useRef<Partial<Record<Tab, number>>>({});
   const shouldRestoreScroll = useRef(false);
@@ -252,6 +260,7 @@ function App() {
       setLastFatigueReport(data.lastFatigueReport);
       setAiCoachSession(data.aiCoachSession);
       setTrainingTemplates(data.trainingTemplates);
+      setIgpsportSyncRecords(data.igpsportSyncRecords);
       setReady(true);
     });
   }, []);
@@ -269,6 +278,7 @@ function App() {
       lastFatigueReport,
       aiCoachSession,
       trainingTemplates,
+      igpsportSyncRecords,
     });
   }, [
     ready,
@@ -282,6 +292,7 @@ function App() {
     lastFatigueReport,
     aiCoachSession,
     trainingTemplates,
+    igpsportSyncRecords,
   ]);
 
   const today = todayKey();
@@ -376,6 +387,9 @@ function App() {
       case "trainingTemplates":
         setTrainingTemplates(defaultTrainingTemplates);
         break;
+      case "igpsportSyncRecords":
+        setIgpsportSyncRecords({});
+        break;
     }
   };
 
@@ -467,7 +481,10 @@ function App() {
               checkins={checkins}
               dayMemos={dayMemos}
               activityAnalyses={activityAnalyses}
+              igpsportSyncRecords={igpsportSyncRecords}
               templates={trainingTemplates}
+              onSettings={setSettings}
+              onIgpsportSyncRecordsChange={setIgpsportSyncRecords}
               onAnalysisSave={(date, analysis) => {
                 setActivityAnalyses((current) => ({
                   ...current,
@@ -525,6 +542,7 @@ function App() {
               dayMemos={dayMemos}
               lastFatigueReport={lastFatigueReport}
               aiCoachSession={aiCoachSession}
+              igpsportSyncRecords={igpsportSyncRecords}
               templates={trainingTemplates}
               onSettings={setSettings}
               onTemplates={setTrainingTemplates}
@@ -546,6 +564,7 @@ function App() {
                   setTrainingTemplates(
                     data.trainingTemplates ?? defaultTrainingTemplates,
                   );
+                  setIgpsportSyncRecords(data.igpsportSyncRecords ?? {});
                 });
               }}
               onClear={async () => {
@@ -560,6 +579,7 @@ function App() {
                 setLastFatigueReport(undefined);
                 setAiCoachSession(undefined);
                 setTrainingTemplates(defaultTrainingTemplates);
+                setIgpsportSyncRecords({});
               }}
             />
           )}
@@ -1589,9 +1609,9 @@ function MonthlyReport({
                   label="训练次数"
                 />
                 <ReportMetricValue
-                  value={formatDurationParts(stats.actualMinutes).value}
-                  unit={formatDurationParts(stats.actualMinutes).unit}
+                  parts={formatDurationMetricParts(stats.actualMinutes)}
                   label="训练时长"
+                  wide
                 />
                 <ReportMetricValue
                   value={stats.totalTss}
@@ -1642,17 +1662,28 @@ function MonthlyReport({
 function ReportMetricValue({
   value,
   unit,
+  parts,
   label,
+  wide = false,
 }: {
-  value: string | number;
+  value?: string | number;
   unit?: string;
+  parts?: Array<{ value: string | number; unit?: string }>;
   label: string;
+  wide?: boolean;
 }) {
   return (
-    <div>
+    <div className={`report-metric-value${wide ? " wide" : ""}`}>
       <strong>
-        {value}
-        {unit && <small>{unit}</small>}
+        {parts?.length
+          ? parts.map((part, index) => (
+              <Fragment key={`${part.value}-${part.unit ?? ""}-${index}`}>
+                {part.value}
+                {part.unit && <small>{part.unit}</small>}
+              </Fragment>
+            ))
+          : value}
+        {!parts?.length && unit && <small>{unit}</small>}
       </strong>
       <span>{label}</span>
     </div>
@@ -1764,7 +1795,10 @@ function CalendarPage({
   checkins,
   dayMemos,
   activityAnalyses,
+  igpsportSyncRecords,
   templates,
+  onSettings,
+  onIgpsportSyncRecordsChange,
   onAnalysisSave,
   onMemoChange,
 }: {
@@ -1773,7 +1807,12 @@ function CalendarPage({
   checkins: Record<string, Checkins>;
   dayMemos: Record<string, DayMemo>;
   activityAnalyses: Record<string, ActivityAnalysis>;
+  igpsportSyncRecords: Record<string, IgpsportSyncRecord>;
   templates: TrainingTemplate[];
+  onSettings: (settings: SettingsState) => void;
+  onIgpsportSyncRecordsChange: (
+    records: Record<string, IgpsportSyncRecord>,
+  ) => void;
   onAnalysisSave: (date: string, analysis: ActivityAnalysis) => void;
   onMemoChange: (date: string, text: string) => void;
 }) {
@@ -1781,8 +1820,10 @@ function CalendarPage({
   const [selectedDate, setSelectedDate] = useState(todayKey());
   const [syncing, setSyncing] = useState(false);
   const [monthSyncing, setMonthSyncing] = useState(false);
+  const [igpsportSyncing, setIgpsportSyncing] = useState(false);
   const [syncError, setSyncError] = useState("");
   const [syncStatus, setSyncStatus] = useState("");
+  const [monthSyncStatus, setMonthSyncStatus] = useState("");
   const days = getCalendarDays(monthAnchor);
   const monthLabel = new Intl.DateTimeFormat("zh-CN", {
     year: "numeric",
@@ -1807,6 +1848,7 @@ function CalendarPage({
   const handleSync = async () => {
     setSyncError("");
     setSyncStatus("");
+    setMonthSyncStatus("");
     setSyncing(true);
     try {
       const analysis = await syncIntervalsAnalysis({
@@ -1822,9 +1864,32 @@ function CalendarPage({
     }
   };
 
-  const handleMonthSync = async () => {
+  const handleIgpsportSync = async () => {
     setSyncError("");
     setSyncStatus("");
+    setMonthSyncStatus("");
+    setIgpsportSyncing(true);
+    try {
+      const result = await syncIgpsportDateToIntervals({
+        settings,
+        date: selectedDate,
+        plan: selectedPlan,
+        syncRecords: igpsportSyncRecords,
+      });
+      onSettings(result.settings);
+      onIgpsportSyncRecordsChange(result.syncRecords);
+      onAnalysisSave(selectedDate, result.analysis);
+      setSyncStatus(result.message);
+    } catch (error) {
+      setSyncError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setIgpsportSyncing(false);
+    }
+  };
+
+  const handleMonthSync = async () => {
+    setSyncError("");
+    setMonthSyncStatus("");
     setMonthSyncing(true);
     try {
       const today = todayKey();
@@ -1841,7 +1906,7 @@ function CalendarPage({
         }));
 
       if (!targets.length) {
-        setSyncStatus("这个月份还没有可同步的日期。");
+        setMonthSyncStatus("这个月份还没有可同步的日期。");
         return;
       }
 
@@ -1852,7 +1917,7 @@ function CalendarPage({
       const activityDays = analyses.filter(
         (analysis) => analysis.activityCount > 0,
       ).length;
-      setSyncStatus(
+      setMonthSyncStatus(
         `已同步 ${targets[0].date} 至 ${targets[targets.length - 1].date}，更新 ${analyses.length} 天，其中 ${activityDays} 天有训练活动。`,
       );
     } catch (error) {
@@ -1906,7 +1971,7 @@ function CalendarPage({
             同步本月
           </Button>
         </div>
-        {syncStatus && <p className="sync-success">{syncStatus}</p>}
+        {monthSyncStatus && <p className="sync-success">{monthSyncStatus}</p>}
       </div>
       <div className="panel calendar-panel">
         <div className="calendar-weekdays">
@@ -1980,13 +2045,23 @@ function CalendarPage({
           <Button
             block
             variant="outline"
+            loading={igpsportSyncing}
+            disabled={syncing || monthSyncing}
+            onClick={handleIgpsportSync}
+          >
+            从 iGPSPORT 同步到 Intervals.icu
+          </Button>
+          <Button
+            block
+            variant="outline"
             loading={syncing}
-            disabled={monthSyncing}
+            disabled={monthSyncing || igpsportSyncing}
             onClick={handleSync}
           >
-            同步 Intervals.icu 并分析差异
+            拉取Intervals.icu数据并分析差异
           </Button>
           {syncError && <p className="sync-error">{syncError}</p>}
+          {syncStatus && <p className="sync-success">{syncStatus}</p>}
           {selectedAnalysis && (
             <div className="analysis-card">
               <div>
@@ -3488,6 +3563,7 @@ function SettingsPage({
   dayMemos,
   lastFatigueReport,
   aiCoachSession,
+  igpsportSyncRecords,
   templates,
   onSettings,
   onTemplates,
@@ -3505,6 +3581,7 @@ function SettingsPage({
   dayMemos: Record<string, DayMemo>;
   lastFatigueReport?: FatigueAnalysisReport;
   aiCoachSession?: AiCoachSession;
+  igpsportSyncRecords: Record<string, IgpsportSyncRecord>;
   templates: TrainingTemplate[];
   onSettings: (settings: SettingsState) => void;
   onTemplates: (templates: TrainingTemplate[]) => void;
@@ -3522,6 +3599,12 @@ function SettingsPage({
   const [templateDialog, setTemplateDialog] = useState<
     "delete" | "reset" | null
   >(null);
+  const [igpsportPassword, setIgpsportPassword] = useState(
+    settings.igpsportPassword ?? "",
+  );
+  const [igpsportLoggingIn, setIgpsportLoggingIn] = useState(false);
+  const [igpsportLoginStatus, setIgpsportLoginStatus] = useState("");
+  const [igpsportLoginError, setIgpsportLoginError] = useState("");
   const settingsScrollPositions = useRef<Partial<Record<SettingsView, number>>>(
     {},
   );
@@ -3534,6 +3617,10 @@ function SettingsPage({
       setSelectedId(templates[0]?.id ?? "");
     }
   }, [selectedId, templates]);
+
+  useEffect(() => {
+    setIgpsportPassword(settings.igpsportPassword ?? "");
+  }, [settings.igpsportPassword]);
 
   useEffect(() => {
     const previous = previousSettingsView.current;
@@ -3617,6 +3704,40 @@ function SettingsPage({
     if (!clearDataKey) return;
     onClearDataItem(clearDataKey);
     setClearDataKey(null);
+  };
+
+  const handleIgpsportLogin = async () => {
+    setIgpsportLoginError("");
+    setIgpsportLoginStatus("");
+    setIgpsportLoggingIn(true);
+    try {
+      const nextSettings = await loginIgpsportAccount({
+        settings,
+        password: igpsportPassword,
+      });
+      onSettings(nextSettings);
+      setIgpsportPassword(nextSettings.igpsportPassword ?? "");
+      setIgpsportLoginStatus("登录成功，密码和访问令牌已加密保存在本机。");
+    } catch (error) {
+      setIgpsportLoginError(
+        error instanceof Error ? error.message : String(error),
+      );
+    } finally {
+      setIgpsportLoggingIn(false);
+    }
+  };
+
+  const clearIgpsportToken = () => {
+    onSettings({
+      ...settings,
+      igpsportPassword: "",
+      igpsportAccessToken: "",
+      igpsportRefreshToken: "",
+      igpsportTokenExpiresAt: "",
+    });
+    setIgpsportPassword("");
+    setIgpsportLoginError("");
+    setIgpsportLoginStatus("已清除 iGPSPORT 登录信息。");
   };
 
   return (
@@ -3731,7 +3852,7 @@ function SettingsPage({
               </span>
               <span>
                 <strong>外部 API 与 AI</strong>
-                <em>Intervals.icu、ChatGPT 兼容接口和密钥</em>
+                <em>Intervals.icu、iGPSPORT、ChatGPT 和密钥</em>
               </span>
               <ChevronRight size={18} />
             </button>
@@ -3810,6 +3931,68 @@ function SettingsPage({
                 }
               />
             </label>
+            <h3>iGPSPORT</h3>
+            <p className="muted-note">
+              用于手动把当天活动文件同步到 Intervals.icu。优先 FIT，若 OSS
+              下载被浏览器拦截会自动尝试
+              GPX。密码、访问令牌和刷新令牌都会加密保存在本机，用于自动续签。
+            </p>
+            <label>
+              iGPSPORT 账号
+              <Input
+                value={settings.igpsportUsername ?? ""}
+                placeholder="填写 iGPSPORT 账号"
+                onChange={(value) =>
+                  onSettings({
+                    ...settings,
+                    igpsportUsername: String(value),
+                  })
+                }
+              />
+            </label>
+            <label>
+              iGPSPORT 密码
+              <Input
+                type="password"
+                value={igpsportPassword}
+                placeholder="加密保存在本机，用于自动续签"
+                onChange={(value) => setIgpsportPassword(String(value))}
+              />
+            </label>
+            <p className="muted-note">
+              Access Token：{settings.igpsportAccessToken ? "已保存" : "未登录"}
+              {settings.igpsportTokenExpiresAt
+                ? `，过期时间 ${formatReportTime(settings.igpsportTokenExpiresAt)}`
+                : ""}
+            </p>
+            <div className="action-row">
+              <Button
+                theme="primary"
+                variant="outline"
+                loading={igpsportLoggingIn}
+                disabled={
+                  !settings.igpsportUsername?.trim() || !igpsportPassword.trim()
+                }
+                onClick={handleIgpsportLogin}
+              >
+                登录并加密保存
+              </Button>
+              <Button
+                variant="outline"
+                disabled={
+                  !settings.igpsportAccessToken && !settings.igpsportPassword
+                }
+                onClick={clearIgpsportToken}
+              >
+                清除登录信息
+              </Button>
+            </div>
+            {igpsportLoginStatus && (
+              <p className="sync-success">{igpsportLoginStatus}</p>
+            )}
+            {igpsportLoginError && (
+              <p className="sync-error">{igpsportLoginError}</p>
+            )}
             <h3>OpenAI 兼容接口</h3>
             <label>
               请求地址
@@ -4065,6 +4248,7 @@ function SettingsPage({
             dayMemos={dayMemos}
             lastFatigueReport={lastFatigueReport}
             aiCoachSession={aiCoachSession}
+            igpsportSyncRecords={igpsportSyncRecords}
             templates={templates}
             onClearItem={setClearDataKey}
           />
@@ -4420,6 +4604,7 @@ function LocalDataSize({
   dayMemos,
   lastFatigueReport,
   aiCoachSession,
+  igpsportSyncRecords,
   templates,
   onClearItem,
 }: {
@@ -4432,6 +4617,7 @@ function LocalDataSize({
   dayMemos: Record<string, DayMemo>;
   lastFatigueReport?: FatigueAnalysisReport;
   aiCoachSession?: AiCoachSession;
+  igpsportSyncRecords: Record<string, IgpsportSyncRecord>;
   templates: TrainingTemplate[];
   onClearItem: (key: LocalDataClearKey) => void;
 }) {
@@ -4449,6 +4635,7 @@ function LocalDataSize({
       lastFatigueReport,
       aiCoachSession,
       trainingTemplates: templates,
+      igpsportSyncRecords,
     },
   };
   const bytes = new Blob([JSON.stringify(snapshot)]).size;
@@ -4482,6 +4669,11 @@ function LocalDataSize({
       hint: "聊天消息",
     },
     { key: "trainingTemplates", count: templates.length, hint: "模板库" },
+    {
+      key: "igpsportSyncRecords",
+      count: countRecord(igpsportSyncRecords),
+      hint: "活动文件同步记录",
+    },
   ];
 
   return (
@@ -5071,6 +5263,16 @@ function formatDurationParts(minutes: number) {
   if (!hours) return { value: String(rest), unit: "分钟" };
   if (!rest) return { value: String(hours), unit: "小时" };
   return { value: `${hours}:${String(rest).padStart(2, "0")}`, unit: "小时" };
+}
+
+function formatDurationMetricParts(minutes: number) {
+  if (!minutes) return [{ value: "0", unit: "分钟" }];
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  const parts: Array<{ value: string; unit: string }> = [];
+  if (hours) parts.push({ value: String(hours), unit: "小时" });
+  if (rest) parts.push({ value: String(rest), unit: "分钟" });
+  return parts.length ? parts : [{ value: "0", unit: "分钟" }];
 }
 
 function formatDelta(value: number) {
