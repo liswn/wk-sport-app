@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ActivityAnalysis,
   AiCoachSession,
@@ -31,6 +31,13 @@ import {
   mergeAnalysisNote,
 } from "./localData";
 import type { LocalDataClearKey } from "../shared/lib";
+import {
+  canRunAutoDailySync,
+  hasFreshAutoDailySyncAttempt,
+  markAutoDailySyncRunning,
+  mergeAutoDailySyncSettings,
+  runAutoDailySync,
+} from "./autoDailySync";
 
 export function useAppData() {
   const [ready, setReady] = useState(false);
@@ -58,6 +65,7 @@ export function useAppData() {
     Record<string, IgpsportSyncRecord>
   >({});
   const [weekStart, setWeekStart] = useState(() => getWeekDays(new Date())[0]);
+  const autoDailySyncRef = useRef<string | null>(null);
 
   useEffect(() => {
     loadAppData().then((data) => {
@@ -104,6 +112,70 @@ export function useAppData() {
     aiCoachSession,
     trainingTemplates,
     igpsportSyncRecords,
+  ]);
+
+  useEffect(() => {
+    if (!ready) return;
+    const syncDate = todayKey();
+    if (hasFreshAutoDailySyncAttempt(settings, syncDate)) return;
+    if (autoDailySyncRef.current === syncDate) return;
+    if (!canRunAutoDailySync(settings)) return;
+
+    autoDailySyncRef.current = syncDate;
+    const startedAt = new Date().toISOString();
+    setSettings((current) =>
+      markAutoDailySyncRunning(current, syncDate, startedAt),
+    );
+
+    runAutoDailySync(
+      {
+        settings,
+        plans,
+        bodyEntries,
+        checkins,
+        trainingLogs,
+        activityAnalyses,
+        templates: trainingTemplates,
+        igpsportSyncRecords,
+      },
+      syncDate,
+    )
+      .then((result) => {
+        setCheckins(result.checkins);
+        setTrainingLogs(result.trainingLogs);
+        setActivityAnalyses(result.activityAnalyses);
+        setIgpsportSyncRecords(result.igpsportSyncRecords);
+        if (result.fatigueReport) {
+          setLastFatigueReport(result.fatigueReport);
+        }
+        setSettings((current) =>
+          mergeAutoDailySyncSettings(current, result.settings, {
+            lastAutoDailySyncAt: new Date().toISOString(),
+            lastAutoDailySyncStatus: result.status,
+            lastAutoDailySyncMessage: result.message,
+          }),
+        );
+      })
+      .catch((error) => {
+        setSettings((current) => ({
+          ...current,
+          lastAutoDailySyncDate: syncDate,
+          lastAutoDailySyncAt: new Date().toISOString(),
+          lastAutoDailySyncStatus: "failed",
+          lastAutoDailySyncMessage:
+            error instanceof Error ? error.message : String(error),
+        }));
+      });
+  }, [
+    activityAnalyses,
+    bodyEntries,
+    checkins,
+    igpsportSyncRecords,
+    plans,
+    ready,
+    settings,
+    trainingLogs,
+    trainingTemplates,
   ]);
 
   const today = todayKey();

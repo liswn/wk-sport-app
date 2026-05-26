@@ -109,6 +109,9 @@ export function TodayPage({
       }),
     [activityAnalyses, checkins, history, plan, plans, settings.ftp, templates],
   );
+  const autoSyncVisible =
+    settings.lastAutoDailySyncDate === todayKey() &&
+    Boolean(settings.lastAutoDailySyncMessage);
 
   const handleFatigueAnalysis = async () => {
     setFatigueError("");
@@ -185,6 +188,18 @@ export function TodayPage({
             AI分析
           </Button>
         </div>
+        {autoSyncVisible && (
+          <p
+            className={`muted-note auto-sync-note auto-sync-${settings.lastAutoDailySyncStatus ?? "success"}`}
+          >
+            今日自动同步：{labelAutoSyncStatus(settings.lastAutoDailySyncStatus)}
+            {settings.lastAutoDailySyncAt
+              ? ` · ${formatReportTime(settings.lastAutoDailySyncAt)}`
+              : ""}
+            <br />
+            {settings.lastAutoDailySyncMessage}
+          </p>
+        )}
         <ReadinessPanel insight={readiness} embedded />
 
         <div className="status-ai-section fatigue-panel">
@@ -247,4 +262,19 @@ export function TodayPage({
       </div>
     </section>
   );
+}
+
+function labelAutoSyncStatus(status: SettingsState["lastAutoDailySyncStatus"]) {
+  switch (status) {
+    case "running":
+      return "进行中";
+    case "success":
+      return "已完成";
+    case "partial":
+      return "部分完成";
+    case "failed":
+      return "失败";
+    default:
+      return "已记录";
+  }
 }

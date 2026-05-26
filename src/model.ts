@@ -179,6 +179,10 @@ export type SettingsState = {
   igpsportRefreshToken?: string;
   igpsportTokenExpiresAt?: string;
   lastBackupAt?: string;
+  lastAutoDailySyncDate?: string;
+  lastAutoDailySyncAt?: string;
+  lastAutoDailySyncStatus?: "running" | "success" | "partial" | "failed";
+  lastAutoDailySyncMessage?: string;
 };
 
 export const DEFAULT_AI_MODEL = "gpt-5.5";
