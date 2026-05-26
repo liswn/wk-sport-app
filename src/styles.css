@@ -26,6 +26,8 @@
     inset 0 1px 1px rgba(255, 255, 255, 0.88),
     inset 0 -1px 1px rgba(45, 73, 68, 0.08);
   --focus-ring: 0 0 0 3px rgba(44, 122, 123, 0.16);
+  --sticky-progress-top: calc(env(safe-area-inset-top) + 8px);
+  --plan-head-top: calc(var(--sticky-progress-top) + 58px);
   font-family:
     Inter,
     ui-sans-serif,
@@ -797,7 +799,7 @@ h3 {
   gap: 12px;
   overflow: hidden;
   border: 1px solid rgba(255, 255, 255, 0.82);
-  border-radius: 28px;
+  border-radius: 0;
   padding: 24px 22px;
   background:
     radial-gradient(
@@ -843,7 +845,9 @@ h3 {
   font-size: 50px;
   line-height: 0.95;
 }
-
+.monthly-card-hero strong small {
+  font-size: 50%;
+}
 .monthly-card-hero span,
 .monthly-card-grid span,
 .monthly-body-card span,
@@ -852,6 +856,9 @@ h3 {
   color: #60716b;
   font-size: 11px;
   font-weight: 750;
+}
+.monthly-card-hero span {
+  margin-top: 10px;
 }
 
 .monthly-card-grid {
@@ -973,7 +980,8 @@ h3 {
   line-height: 1.5;
 }
 
-.data-size-card {
+.data-size-card,
+.local-data-size {
   display: grid;
   gap: 12px;
   margin-bottom: 12px;
@@ -989,7 +997,8 @@ h3 {
     rgba(255, 255, 255, 0.34);
 }
 
-.data-size-head {
+.data-size-head,
+.local-data-total {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
@@ -997,25 +1006,30 @@ h3 {
 }
 
 .data-size-head span,
-.data-size-grid span {
+.data-size-grid span,
+.local-data-total span,
+.local-data-grid span {
   color: var(--muted);
   font-size: 12px;
   font-weight: 750;
 }
 
-.data-size-head strong {
+.data-size-head strong,
+.local-data-total strong {
   color: var(--ink);
   font-size: 22px;
   line-height: 1;
 }
 
-.data-size-grid {
+.data-size-grid,
+.local-data-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
 }
 
-.data-size-grid button {
+.data-size-grid button,
+.local-data-item {
   display: grid;
   min-width: 0;
   min-height: 74px;
@@ -1028,22 +1042,33 @@ h3 {
   text-align: left;
 }
 
-.data-size-grid button:not(:disabled):active {
+.data-size-grid button:not(:disabled):active,
+.local-data-item:not(:disabled):active {
   transform: scale(0.98);
   border-color: rgba(44, 122, 123, 0.26);
   background: rgba(237, 246, 245, 0.62);
 }
 
-.data-size-grid button:disabled {
+.data-size-grid button:focus-visible,
+.local-data-item:focus-visible {
+  border-color: #6f9d87;
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.data-size-grid button:disabled,
+.local-data-item:disabled {
   opacity: 0.58;
 }
 
-.data-size-grid strong {
+.data-size-grid strong,
+.local-data-item strong {
   color: #25302c;
   font-size: 17px;
 }
 
-.data-size-grid em {
+.data-size-grid em,
+.local-data-item em {
   min-width: 0;
   overflow: hidden;
   color: #7b8581;
@@ -1054,7 +1079,8 @@ h3 {
   white-space: nowrap;
 }
 
-.data-size-card p {
+.data-size-card p,
+.local-data-size p {
   margin: 0;
   color: var(--muted);
   font-size: 12px;
@@ -1353,7 +1379,7 @@ h3 {
 
 .sticky-progress {
   position: sticky;
-  top: calc(env(safe-area-inset-top) + 8px);
+  top: var(--sticky-progress-top);
   z-index: 12;
   align-self: start;
   box-shadow: var(--glass-shadow), var(--glass-inset);
@@ -1764,6 +1790,7 @@ h3 {
 }
 
 .settings-nav em {
+  display: -webkit-box;
   overflow: hidden;
   color: var(--muted);
   font-size: 12px;
@@ -1771,7 +1798,9 @@ h3 {
   font-weight: 650;
   line-height: 1.35;
   text-overflow: ellipsis;
-  white-space: nowrap;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
 }
 
 .settings-nav-icon {
@@ -1836,12 +1865,15 @@ h3 {
 }
 
 .settings-subpage-head p {
+  display: -webkit-box;
   overflow: hidden;
   color: var(--muted);
   font-size: 12px;
   line-height: 1.35;
   text-overflow: ellipsis;
-  white-space: nowrap;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
 }
 
 .install-guide {
@@ -2120,7 +2152,8 @@ h3 {
 .coach-sheet {
   display: flex;
   flex-flow: column;
-  height: 90vh;
+  height: min(90dvh, 720px);
+  max-height: calc(100dvh - env(safe-area-inset-top) - 8px);
   gap: 12px;
   overflow: hidden;
   border-radius: 22px 22px 0 0;
@@ -2466,9 +2499,9 @@ h3 {
 
 .plan-head {
   position: sticky;
-  top: calc(env(safe-area-inset-top) + 55px);
+  top: var(--plan-head-top);
   background-color: #fff;
-  z-index: 12;
+  z-index: 11;
   padding: 12px 12px 0;
   min-width: 0;
   align-items: center;
@@ -2653,6 +2686,12 @@ h3 {
   color: #2f3c38;
 }
 
+.power-range-field button:focus-visible {
+  border-color: #6f9d87;
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
 .power-range-field strong {
   flex: 1;
   width: 0;
@@ -2751,11 +2790,15 @@ h3 {
 
 .dialog-copy {
   display: grid;
+  max-height: min(60dvh, 460px);
   gap: 8px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   color: #4f5d58;
   font-size: 14px;
   line-height: 1.6;
   text-align: left;
+  -webkit-overflow-scrolling: touch;
 }
 
 label {
@@ -2838,6 +2881,12 @@ select:focus,
   border: 1px solid rgba(117, 138, 128, 0.26);
   border-radius: 12px;
   background: rgba(255, 255, 255, 0.58);
+}
+
+.t-input:focus-within,
+.t-textarea:focus-within {
+  border-color: #6f9d87;
+  box-shadow: var(--focus-ring);
 }
 
 .t-input {

@@ -1311,48 +1311,6 @@ function normalizeCoachMessage(value: string) {
     .trim();
 }
 
-function normalizeAiCoachRecord(parsed: unknown): Record<string, unknown> {
-  if (Array.isArray(parsed)) {
-    return { message: "", planPatch: { changes: parsed } };
-  }
-  let record = asRecord(parsed) ?? {};
-  const chatCompletionContent = extractChatCompletionContent(record);
-  if (chatCompletionContent) {
-    const nested = extractNestedJsonRecord(chatCompletionContent);
-    if (nested) {
-      record = {
-        ...record,
-        ...nested,
-        message: stringValue(nested.message) || chatCompletionContent,
-      };
-    }
-  }
-  for (let index = 0; index < 4; index += 1) {
-    const nestedContent = extractNestedJsonRecord(
-      record.content ?? record.message ?? record.reply,
-    );
-    if (!nestedContent) break;
-    record = {
-      ...record,
-      ...nestedContent,
-      message:
-        stringValue(nestedContent.message) ||
-        (looksLikeJsonPayload(stringValue(record.message))
-          ? ""
-          : stringValue(record.message)) ||
-        (looksLikeJsonPayload(stringValue(record.reply))
-          ? ""
-          : stringValue(record.reply)) ||
-        (looksLikeJsonPayload(stringValue(record.content))
-          ? ""
-          : stringValue(record.content)),
-    };
-  }
-  const planPatch = coerceJsonRecord(record.planPatch ?? record.patch);
-  if (planPatch) record = { ...record, planPatch };
-  return record;
-}
-
 function extractNestedJsonRecord(value: unknown) {
   if (typeof value !== "string") return undefined;
   const parsed = extractJson(value);
